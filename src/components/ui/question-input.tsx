@@ -35,37 +35,50 @@ function isAnswered(val: string | string[] | undefined, type: string): boolean {
   return typeof val === 'string' && val !== ''
 }
 
+function isCustomOption(option: string): boolean {
+  return /^(something else|other)(?:\b|\.)/i.test(option.trim())
+}
+
 export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputProps) {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({})
   const [selected, setSelected] = useState<string | string[]>(defaultFor(questions[0]?.type || 'text'))
+  const [customInput, setCustomInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const customInputRef = useRef<HTMLInputElement>(null)
 
   const question = questions[currentIndex]
   const isFirst = currentIndex === 0
   const isLast = currentIndex === questions.length - 1
+  const options = question.options?.filter(opt => !isCustomOption(opt)) || []
+  const customPlaceholder = question.options?.find(isCustomOption) || (question.type === 'multi' ? 'Add your own...' : 'Something else...')
+  const customSingleValue = typeof selected === 'string' && !options.includes(selected) ? selected : ''
+  const currentAnswer = question.type === 'multi' && customInput.trim()
+    ? [...new Set([...(Array.isArray(selected) ? selected : []), customInput.trim()])]
+    : selected
 
   useEffect(() => {
     const existing = answers[question.id]
     setSelected(existing !== undefined ? existing : defaultFor(question.type))
+    setCustomInput('')
     if (question.type === 'text') {
       const t = setTimeout(() => textareaRef.current?.focus(), 200)
       return () => clearTimeout(t)
     }
   }, [currentIndex])
 
-  const canAdvance = isAnswered(selected, question.type)
-  const allAnswered = questions.every(q => isAnswered(q.id === question.id ? selected : answers[q.id], q.type))
+  const canAdvance = isAnswered(currentAnswer, question.type)
+  const allAnswered = questions.every(q => isAnswered(q.id === question.id ? currentAnswer : answers[q.id], q.type))
 
   const saveCurrent = () => {
-    setAnswers(prev => ({ ...prev, [question.id]: selected }))
+    setAnswers(prev => ({ ...prev, [question.id]: currentAnswer }))
   }
 
   const handleNext = () => {
     if (!canAdvance) return
     saveCurrent()
     if (isLast) {
-      const final = { ...answers, [question.id]: selected }
+      const final = { ...answers, [question.id]: currentAnswer }
       onSubmit(questions.map(q => ({ id: q.id, answer: final[q.id] })))
     } else {
       setCurrentIndex(i => i + 1)
@@ -108,7 +121,7 @@ export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputPr
         <div className={cn("px-3", question.type === 'text' ? 'pb-2' : 'pb-3')}>
           {question.type === 'single' && (
             <div className="space-y-1">
-              {question.options?.map((opt, i) => (
+              {options.map((opt, i) => (
                 <button
                   key={opt}
                   type="button"
@@ -125,12 +138,28 @@ export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputPr
                   {opt}
                 </button>
               ))}
+              <div className={cn(
+                "flex items-center mt-1 px-3 py-2.5 rounded-xl border transition-all",
+                customSingleValue
+                  ? "border-primary/30 bg-primary/10 ring-1 ring-primary/30"
+                  : "border-white/[0.06] bg-white/[0.02] hover:border-white/[0.10]"
+              )}>
+                <input
+                  ref={customInputRef}
+                  type="text"
+                  value={customSingleValue}
+                  disabled={disabled}
+                  onChange={(e) => setSelected(e.target.value)}
+                  placeholder={customPlaceholder}
+                  className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/80"
+                />
+              </div>
             </div>
           )}
 
           {question.type === 'multi' && (
             <div className="space-y-1">
-              {question.options?.map((opt, i) => {
+              {options.map((opt, i) => {
                 const list = Array.isArray(selected) ? selected : []
                 const isSelected = list.includes(opt)
                 return (
@@ -152,6 +181,41 @@ export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputPr
                   </button>
                 )
               })}
+              <div className="flex items-center gap-2 mt-1 px-3 py-2.5 rounded-xl border border-white/[0.06] bg-white/[0.02] hover:border-white/[0.10] transition-all focus-within:border-primary/30 focus-within:bg-primary/10 focus-within:ring-1 focus-within:ring-primary/30">
+                <input
+                  ref={customInputRef}
+                  type="text"
+                  value={customInput}
+                  disabled={disabled}
+                  onChange={(e) => setCustomInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && customInput.trim()) {
+                      e.preventDefault()
+                      const value = customInput.trim()
+                      const list = Array.isArray(selected) ? selected : []
+                      if (!list.includes(value)) setSelected([...list, value])
+                      setCustomInput('')
+                    }
+                  }}
+                  placeholder={customPlaceholder}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/80"
+                />
+                {customInput.trim() && <span className="text-[10px] text-muted-foreground/50 shrink-0">Enter to add</span>}
+              </div>
+              {(Array.isArray(selected) ? selected : [])
+                .filter(value => !options.includes(value))
+                .map(value => (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => setSelected((Array.isArray(selected) ? selected : []).filter(item => item !== value))}
+                    className="w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all flex items-center justify-between bg-primary/10 text-foreground font-medium ring-1 ring-primary/30"
+                  >
+                    <span>{value}</span>
+                    <Check className="size-4 text-primary" />
+                  </button>
+                ))}
             </div>
           )}
 
