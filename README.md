@@ -116,7 +116,7 @@ Contributions are welcome. Since `main` is protected, all changes go through pul
 1. Fork the repo and create a feature branch
 2. Run `npm run typecheck` and `npm run build` locally before pushing
 3. Open a pull request — CI runs typecheck + build on every PR
-4. PRs opened from branches inside this repo get an automated AI review. On fork PRs (where CI secrets are unavailable), the maintainer — or you, by commenting `/oc review this PR` — can trigger a review via the OpenCode agent
+4. PRs opened from branches inside this repo get an automated AI review. On fork PRs (where CI secrets are unavailable), the maintainer or a trusted contributor can trigger one by commenting `/oc review this PR`
 5. The maintainer merges once all checks pass
 
 ## Author
