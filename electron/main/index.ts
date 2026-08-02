@@ -15,6 +15,10 @@ type Message = { role: string; content: string | null; parts?: any[]; tool_call_
 // Fedora 44 / Wayland fixes — must be before app.whenReady
 app.commandLine.appendSwitch('no-sandbox')
 app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations')
+if (!app.isPackaged) {
+  app.commandLine.appendSwitch('remote-debugging-port', '9229')
+  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+}
 app.setName('Soxial')
 if (process.platform === 'win32') app.setAppUserModelId('com.soxial.desktop')
 

@@ -39,6 +39,10 @@ Requires:
 - A free [Google AI Studio API key](https://aistudio.google.com/apikey)
 - (Optional) Logged-in X and Reddit sessions for platform features
 
+### Development DevTools
+
+Development builds expose the Electron renderer over Chrome DevTools Protocol at `http://127.0.0.1:9229`. CDP-capable tools and AI agents can use this endpoint to inspect and navigate the DOM or capture screenshots. The endpoint is bound to localhost and is disabled in packaged builds.
+
 To build a distributable:
 
 ```bash
