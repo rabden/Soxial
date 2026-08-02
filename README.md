@@ -132,3 +132,7 @@ Other projects: [X-twitter-social-manager-skill](https://github.com/rabden/X-twi
 ---
 
 Built with TypeScript, Electron, React, SQLite, and Google Gemini AI.
+
+## CI review flow
+
+This line exists to validate the PR review pipeline end-to-end.
