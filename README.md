@@ -9,6 +9,7 @@ An AI-powered desktop social media manager for X/Twitter and Reddit. A Gemini AI
 | **Linux** (AppImage) | [Soxial-0.1.8.AppImage](https://github.com/rabden/Soxial/releases/download/v0.1.8/Soxial-0.1.8.AppImage) | ~187 MB | `chmod +x Soxial-0.1.8.AppImage && ./Soxial-0.1.8.AppImage` |
 | **Linux** (deb) | [soxial_0.1.8_amd64.deb](https://github.com/rabden/Soxial/releases/download/v0.1.8/soxial_0.1.8_amd64.deb) | ~143 MB | `sudo dpkg -i soxial_0.1.8_amd64.deb` |
 | **macOS** (Apple Silicon) | [Soxial-0.1.8-arm64.dmg](https://github.com/rabden/Soxial/releases/download/v0.1.8/Soxial-0.1.8-arm64.dmg) | ~180 MB | Open dmg, drag to Applications. First launch: right-click, Open (unsigned) |
+| **macOS** (Intel) | [Soxial-0.1.8.dmg](https://github.com/rabden/Soxial/releases/download/v0.1.8/Soxial-0.1.8.dmg) | ~182 MB | Open dmg, drag to Applications. First launch: right-click, Open (unsigned) |
 | **Windows** | [Soxial.Setup.0.1.8.exe](https://github.com/rabden/Soxial/releases/download/v0.1.8/Soxial.Setup.0.1.8.exe) | ~147 MB | Run installer. SmartScreen warning, "More info", "Run anyway" |
 
 > **Walkthrough video**: [https://youtu.be/vRNKqhSeWgY](https://youtu.be/vRNKqhSeWgY)
