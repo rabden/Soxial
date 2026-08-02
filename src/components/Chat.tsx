@@ -1289,7 +1289,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
         {!sidebarOpen && (
           <button
             onClick={() => setSidebarOpen(true)}
-            className="absolute top-3 left-3 z-20 p-2 rounded-xl text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/[0.04] transition-premium-fast border border-transparent hover:border-white/[0.06]"
+            className={`absolute left-3 z-20 p-2 rounded-xl text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/[0.04] transition-premium-fast border border-transparent hover:border-white/[0.06] ${window.api.platform === 'darwin' ? 'top-10' : 'top-3'}`}
           >
             <PanelLeft className="size-3.5" />
           </button>
