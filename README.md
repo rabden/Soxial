@@ -109,6 +109,15 @@ soxial/
 | `npm run typecheck` | Type-check both Node and web targets |
 | `npm run reset` | Delete DB, uninstall CLIs, start fresh |
 
+## Contributing
+
+Contributions are welcome. Since `main` is protected, all changes go through pull requests:
+
+1. Fork the repo and create a feature branch
+2. Run `npm run typecheck` and `npm run build` locally before pushing
+3. Open a pull request — CI runs typecheck + build, and an AI review runs on every PR
+4. The maintainer reviews and merges once all checks pass
+
 ## Author
 
 **Hossain Jahed** — [github.com/rabden](https://github.com/rabden)
