@@ -32,11 +32,11 @@ function isAnswered(val: string | string[] | undefined, type: string): boolean {
   if (val === undefined) return false
   if (type === 'multi') return Array.isArray(val) && val.length > 0
   if (type === 'text') return typeof val === 'string' && val.trim() !== ''
-  return typeof val === 'string' && val !== ''
+  return typeof val === 'string' && val.trim() !== ''
 }
 
 function isCustomOption(option: string): boolean {
-  return /^(something else|other)(?:\b|\.)/i.test(option.trim())
+  return /^(something else|other)(?:\.\.\.)?\.?$/i.test(option.trim())
 }
 
 export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputProps) {
@@ -53,9 +53,7 @@ export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputPr
   const options = question.options?.filter(opt => !isCustomOption(opt)) || []
   const customPlaceholder = question.options?.find(isCustomOption) || (question.type === 'multi' ? 'Add your own...' : 'Something else...')
   const customSingleValue = typeof selected === 'string' && !options.includes(selected) ? selected : ''
-  const currentAnswer = question.type === 'multi' && customInput.trim()
-    ? [...new Set([...(Array.isArray(selected) ? selected : []), customInput.trim()])]
-    : selected
+  const currentAnswer = selected
 
   useEffect(() => {
     const existing = answers[question.id]
@@ -151,6 +149,7 @@ export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputPr
                   disabled={disabled}
                   onChange={(e) => setSelected(e.target.value)}
                   placeholder={customPlaceholder}
+                  aria-label="Type your own answer"
                   className="w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/80"
                 />
               </div>
@@ -198,6 +197,7 @@ export function QuestionInput({ questions, onSubmit, disabled }: QuestionInputPr
                     }
                   }}
                   placeholder={customPlaceholder}
+                  aria-label="Add your own answer"
                   className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/80"
                 />
                 {customInput.trim() && <span className="text-[10px] text-muted-foreground/50 shrink-0">Enter to add</span>}
