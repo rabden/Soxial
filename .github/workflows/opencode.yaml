@@ -9,7 +9,7 @@ on:
 jobs:
   opencode:
     if: |
-      contains(fromJSON('["rabden", "kubenstein"]'), github.event.comment.user.login) &&
+      github.event.comment.user.login == 'rabden' &&
       (contains(github.event.comment.body, ' /oc') ||
       startsWith(github.event.comment.body, '/oc') ||
       contains(github.event.comment.body, ' /opencode') ||
