@@ -1,5 +1,6 @@
 interface Window {
   api: {
+    platform: string
     getProfile: () => Promise<any>
     updateProfile: (data: Record<string, any>) => Promise<any>
     dbQuery: (table: string, where?: string, params?: any[]) => Promise<any>

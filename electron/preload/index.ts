@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 const api = {
+  platform: process.platform,
   getProfile: () => ipcRenderer.invoke('db:getProfile'),
   updateProfile: (data: Record<string, any>) => ipcRenderer.invoke('db:updateProfile', data),
   dbQuery: (table: string, where?: string, params?: any[]) => ipcRenderer.invoke('db:query', table, where, params),
