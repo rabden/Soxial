@@ -36,6 +36,8 @@ jobs:
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "true"
           github_action_config.auto_improve: "true"
+          pr_code_suggestions.use_inline_comments: "true"
+          pr_code_suggestions.num_code_suggestions: "4"
 
       - name: Set opencode-review status
         if: always()
