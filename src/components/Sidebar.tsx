@@ -101,7 +101,7 @@ export default function Sidebar({
         <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent pointer-events-none" />
 
         <div className="relative z-10 flex flex-col h-full">
-          {/* Header */}
+          {/* Header Section */}
           <div className={`flex items-center justify-between pl-5 pr-3 pb-3 ${window.api.platform === 'darwin' ? 'pt-10' : 'pt-5'}`}>
             <AppLogo showLabel iconClassName="size-7" labelClassName="text-[13px] tracking-wide font-semibold text-white/90" />
             <motion.button 
