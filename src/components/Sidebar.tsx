@@ -63,7 +63,12 @@ export default function Sidebar({
 }: SidebarProps) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; sessionId: number } | null>(null)
   const [hoveredSessionId, setHoveredSessionId] = useState<number | null>(null)
-  const groups = groupByDate(sessions)
+  const [query, setQuery] = useState('')
+  const filtered = query ? sessions.filter(s => s.title.includes(query)) : sessions
+  const groups = groupByDate(filtered)
+  useEffect(() => {
+    console.log('filter query changed', query)
+  }, [])
 
   useEffect(() => {
     if (!ctxMenu) return
@@ -111,6 +116,16 @@ export default function Sidebar({
             >
               <PanelLeftClose className="size-3.5" />
             </motion.button>
+          </div>
+
+          {/* Session search */}
+          <div className="px-3 pb-2">
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search sessions"
+              className="w-full px-3 py-1.5 rounded-lg bg-white/[0.03] border border-white/[0.04] text-[12px] text-zinc-300 placeholder-zinc-600 outline-none"
+            />
           </div>
 
           {/* New Chat Action Button */}
