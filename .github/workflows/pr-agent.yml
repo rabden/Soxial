@@ -20,8 +20,11 @@ jobs:
       issues: write
       pull-requests: write
       contents: read
+      statuses: write
     steps:
-      - uses: qodo-ai/pr-agent@main
+      - name: Run pr-agent
+        id: pr_agent
+        uses: qodo-ai/pr-agent@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_KEY: ${{ secrets.ZEN_API_KEY }}
@@ -32,4 +35,21 @@ jobs:
           config.custom_reasoning_model: "true"
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "true"
-          github_action_config.auto_improve: "false"
+          github_action_config.auto_improve: "true"
+
+      - name: Set opencode-review status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="${{ github.event.pull_request.head.sha }}"
+          if [ "${{ steps.pr_agent.outcome }}" = "success" ]; then
+            state="success"; desc="pr-agent review completed"
+          else
+            state="failure"; desc="pr-agent review failed"
+          fi
+          gh api -X POST "repos/rabden/Soxial/statuses/${SHA}" \
+            -f state="$state" \
+            -f context="opencode-review" \
+            -f description="$desc" \
+            -f target_url="https://github.com/rabden/Soxial/actions/runs/${{ github.run_id }}"
