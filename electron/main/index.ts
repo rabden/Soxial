@@ -216,6 +216,7 @@ function setupIpc() {
   })
 
   ipcMain.handle('db:updateProfile', (_e, data) => {
+    if (isTwitterHandleRebuildActive()) throw new Error('Profile rebuild in progress. Try again after it finishes.')
     logger.info('main', 'db:updateProfile', Object.keys(data))
     return updateProfile(data)
   })
@@ -226,6 +227,7 @@ function setupIpc() {
   })
 
   ipcMain.handle('db:insert', (_e, table: string, data: Record<string, any>) => {
+    if (isTwitterHandleRebuildActive()) throw new Error('Profile rebuild in progress. Try again after it finishes.')
     logger.debug('main', `db:insert ${table}`, Object.keys(data))
     return insertRow(table, data)
   })

@@ -97,7 +97,7 @@ export default function Sidebar({
 
   return (
     <>
-      <div aria-disabled={disabled} className={`w-64 flex-shrink-0 flex flex-col bg-[#09090b]/90 backdrop-blur-xl border-r border-white/[0.04] relative select-none transition-opacity ${disabled ? 'opacity-50 pointer-events-none cursor-not-allowed' : ''}`}>
+      <div aria-disabled={disabled} inert={disabled || undefined} className={`w-64 flex-shrink-0 flex flex-col bg-[#09090b]/90 backdrop-blur-xl border-r border-white/[0.04] relative select-none transition-opacity ${disabled ? 'opacity-50 pointer-events-none cursor-not-allowed' : ''}`}>
         {disabled && (
           <div className="absolute inset-x-3 top-3 z-30 rounded-xl border border-blue-500/15 bg-blue-500/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-200 text-center">
             Navigation locked

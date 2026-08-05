@@ -16,6 +16,7 @@
     "preview": "GDK_GL='disabled' GTK_MODULES='' GTK_IM_MODULE='' NO_AT_BRIDGE=1 electron-vite preview",
     "kill": "pkill -9 -f 'electron .' || true",
     "restart": "npm run kill && sleep 1 && npm run dev",
+    "test": "vitest run",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -69,7 +70,8 @@
     "react-dom": "^19.0.0",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.8.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^3.2.7"
   },
   "build": {
     "appId": "com.soxial.desktop",
