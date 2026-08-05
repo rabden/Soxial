@@ -354,9 +354,11 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
   const contextSummaryRef = useRef<string | null>(null);
   const [quickActions, setQuickActions] = useState<string[]>([]);
   const fetchedQuickActions = useRef(false);
+  const quickActionsRequestRef = useRef(0);
   const [view, setView] = useState<View>("chat");
   const [profile, setProfile] = useState<any>(null);
   const [scheduledCount, setScheduledCount] = useState(0);
+  const [profileRebuilding, setProfileRebuilding] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   const [apiTier, setApiTier] = useState<{ tier: string } | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
@@ -540,8 +542,9 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     if (currentSessionId === null) {
       if (!fetchedQuickActions.current) {
         fetchedQuickActions.current = true;
+        const requestId = ++quickActionsRequestRef.current;
         window.api.generateQuickActions().then((r: any) => {
-          if (r.success) setQuickActions(r.suggestions);
+          if (requestId === quickActionsRequestRef.current) setQuickActions(r.suggestions);
         });
       }
     } else {
@@ -561,6 +564,16 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       ["draft", "scheduled"],
     );
     setScheduledCount(posts?.length || 0);
+  }
+
+  async function handleTwitterHandleRebuilt() {
+    window.api.getProfile().then(setProfile);
+    loadScheduledCount();
+    fetchedQuickActions.current = true;
+    setQuickActions([]);
+    const requestId = ++quickActionsRequestRef.current;
+    const r = await window.api.generateQuickActions();
+    if (requestId === quickActionsRequestRef.current) setQuickActions(r.suggestions);
   }
 
   function parseSteps(
@@ -1276,12 +1289,13 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
           streaming={streaming}
           profile={profile}
           scheduledCount={scheduledCount}
+          disabled={profileRebuilding}
           sessionStates={sessionStates}
-          onNewChat={newChat}
-          onSelectSession={selectSession}
-          onDeleteSession={deleteSession}
-          onNavigate={setView}
-          onToggleSidebar={() => setSidebarOpen(false)}
+          onNewChat={() => { if (!profileRebuilding) newChat(); }}
+          onSelectSession={(id) => { if (!profileRebuilding) selectSession(id); }}
+          onDeleteSession={(id) => { if (!profileRebuilding) deleteSession(id); }}
+          onNavigate={(nextView) => { if (!profileRebuilding) setView(nextView); }}
+          onToggleSidebar={() => { if (!profileRebuilding) setSidebarOpen(false); }}
         />
       )}
 
@@ -1304,6 +1318,8 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
               window.api.getProfile().then(setProfile);
               loadApiInfo();
             }}
+            onTwitterHandleRebuilt={handleTwitterHandleRebuilt}
+            onTwitterHandleRebuildRunningChange={setProfileRebuilding}
             onBack={() => {
               window.api.getProfile().then(setProfile);
               loadApiInfo();

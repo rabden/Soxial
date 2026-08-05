@@ -10,9 +10,16 @@ interface ProfileProps {
   profile: any;
   onBack: () => void;
   onSaved?: () => void;
+  onTwitterHandleRebuilt?: () => void;
+  onTwitterHandleRebuildRunningChange?: (running: boolean) => void;
 }
 
-export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
+function ipcErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) return fallback
+  return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+}
+
+export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebuilt, onTwitterHandleRebuildRunningChange }: ProfileProps) {
   const [activeTab, setActiveTab] = useState<'google' | 'zhipu'>('google')
   const [primaryGoogleKey, setPrimaryGoogleKey] = useState(profile?.gemini_api_key || '')
   const [primaryZhipuKey, setPrimaryZhipuKey] = useState(profile?.zai_api_key || '')
@@ -22,6 +29,12 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [expandStrategy, setExpandStrategy] = useState(false)
+  const [changingHandle, setChangingHandle] = useState(false)
+  const [handleInput, setHandleInput] = useState('')
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuildPhase, setRebuildPhase] = useState('')
+  const [rebuildError, setRebuildError] = useState('')
+  const [rebuildResult, setRebuildResult] = useState<{ handle: string; archivedCount: number } | null>(null)
 
   useEffect(() => {
     window.api.getApiKeys('google').then((keys: any[]) => {
@@ -34,6 +47,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
   }, [])
 
   const handleSaveKeys = async () => {
+    if (rebuilding) return
     setSaving(true)
     try {
       await window.api.updateProfile({
@@ -71,6 +85,44 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
       alert('Failed to save API keys. Please try again.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const resetHandleChange = () => {
+    setChangingHandle(false)
+    setHandleInput('')
+    setRebuildError('')
+    setRebuildPhase('')
+    setRebuildResult(null)
+  }
+
+  const postCountCopy = (count: number) => `${count} active X draft/scheduled ${count === 1 ? 'post' : 'posts'}`
+
+  const handleStartRebuild = async () => {
+    if (!handleInput.trim()) return
+    setRebuilding(true)
+    onTwitterHandleRebuildRunningChange?.(true)
+    setRebuildError('')
+    setRebuildPhase('Checking selected X profile')
+    let unsubscribe = () => {}
+    try {
+      const preview = await window.api.previewTwitterHandleRebuild(handleInput)
+      unsubscribe = window.api.onTwitterHandleRebuildProgress((event) => {
+        if (event.phase === 'cutover') setRebuildPhase('Applying rebuilt playbook')
+        else if (event.phase === 'done') setRebuildPhase('Done')
+        else if (event.phase === 'model' || event.phase === 'chunk' || event.phase === 'transientRetry' || event.phase === 'modelSwitch') setRebuildPhase('Rebuilding shared playbook')
+        else setRebuildPhase('Checking and gathering source material')
+      })
+      const result = await window.api.startTwitterHandleRebuild(preview.handle, preview.activeTwitterScheduledPostCount)
+      setRebuildPhase('Done')
+      setRebuildResult({ handle: preview.handle, archivedCount: result.archivedCount })
+      onTwitterHandleRebuilt?.()
+    } catch (err) {
+      setRebuildError(ipcErrorMessage(err, 'Rebuild failed.'))
+    } finally {
+      unsubscribe()
+      setRebuilding(false)
+      onTwitterHandleRebuildRunningChange?.(false)
     }
   }
 
@@ -124,7 +176,8 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
             onClick={onBack} 
             whileHover={{ x: -2 }}
             whileTap={{ scale: 0.98 }}
-            className="group flex items-center gap-2 text-[10px] tracking-[0.16em] font-bold text-zinc-500 hover:text-white transition-colors uppercase"
+            disabled={rebuilding}
+            className="group flex items-center gap-2 text-[10px] tracking-[0.16em] font-bold text-zinc-500 hover:text-white transition-colors uppercase disabled:opacity-30 disabled:pointer-events-none"
           >
             <ArrowLeft className="size-3.5" />
             Back to Chat
@@ -144,14 +197,28 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
               <span className="text-zinc-800">/</span>
             )}
             {profile?.twitter_handle && (
-              <a 
-                href={`https://x.com/${profile.twitter_handle}`} 
-                target="_blank" 
-                rel="noreferrer"
-                className="hover:text-white transition-colors"
-              >
-                @{profile.twitter_handle}
-              </a>
+              <span className="inline-flex items-center gap-2">
+                <a
+                  href={`https://x.com/${profile.twitter_handle}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:text-white transition-colors"
+                >
+                  @{profile.twitter_handle}
+                </a>
+                <button
+                  onClick={() => {
+                    setChangingHandle(true)
+                    setHandleInput(profile.twitter_handle ? `@${profile.twitter_handle}` : '')
+                    setRebuildError('')
+                    setRebuildResult(null)
+                  }}
+                  disabled={rebuilding}
+                  className="text-[10px] uppercase tracking-[0.16em] text-zinc-400 hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                >
+                  Change
+                </button>
+              </span>
             )}
             {profile?.twitter_handle && profile?.reddit_username && (
               <span className="text-zinc-800">/</span>
@@ -168,6 +235,93 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
             )}
           </div>
         </motion.header>
+
+        {changingHandle && (
+          <motion.section variants={itemVariants} className="mb-14 p-1.5 rounded-3xl bg-white/[0.02] border border-white/[0.04] shadow-[0_12px_40px_rgba(0,0,0,0.5)]">
+            <div className="p-6 md:p-8 rounded-[calc(1.5rem+4px)] bg-[#0c0c10]/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] space-y-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 mb-2">
+                    X Voice Source
+                  </h2>
+                  <p className="text-sm text-zinc-300 font-medium max-w-xl leading-6">
+                    Pick any public X profile for voice and strategy inspiration. It does not need to be your account.
+                  </p>
+                </div>
+                {!rebuilding && (
+                  <button
+                    onClick={resetHandleChange}
+                    className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 hover:text-white transition-colors"
+                  >
+                    Back
+                  </button>
+                )}
+              </div>
+
+              {!rebuildResult && (
+                <div className="space-y-5">
+                  <label className="sr-only" htmlFor="twitter-handle-rebuild-input">X handle</label>
+                  <input
+                    id="twitter-handle-rebuild-input"
+                    value={handleInput}
+                    onChange={(e) => {
+                      setHandleInput(e.target.value)
+                      setRebuildError('')
+                    }}
+                    disabled={rebuilding}
+                    placeholder="@handle"
+                    className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl px-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10 disabled:opacity-50"
+                  />
+
+                  <div className="space-y-5 p-5 rounded-2xl bg-white/[0.015] border border-white/[0.04]">
+                    <div className="space-y-2 text-xs text-zinc-400 leading-5">
+                      <p>The entire shared cross-platform playbook will be rebuilt, including Reddit-related strategy.</p>
+                      <p>Any active X drafts and scheduled posts will be archived and hidden from the active schedule.</p>
+                      <p>Chats and settings remain.</p>
+                      <p>Existing setup stays intact if rebuilding fails.</p>
+                      <p>Likes/bookmarks are only used when the selected handle matches the signed-in X account.</p>
+                    </div>
+                    {rebuilding ? (
+                      <div role="status" aria-live="polite" className="flex items-center gap-3 text-xs text-zinc-300 pt-1">
+                        <div className="w-3 h-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+                        <span>{rebuildPhase}</span>
+                      </div>
+                    ) : rebuildError ? (
+                      <div className="space-y-4">
+                        <div role="alert" className="p-4 rounded-2xl bg-red-500/10 border border-red-500/15 text-xs text-red-200 leading-5">
+                          {rebuildError}
+                        </div>
+                        <div className="flex gap-3">
+                          <button onClick={handleStartRebuild} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors">
+                            Retry rebuild
+                          </button>
+                          <button onClick={resetHandleChange} className="px-5 py-3 rounded-full bg-white/[0.03] text-zinc-400 text-xs font-bold hover:text-white hover:bg-white/[0.05] transition-colors">
+                            Back
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                        <button onClick={handleStartRebuild} disabled={!handleInput.trim()} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors disabled:opacity-30 disabled:pointer-events-none">
+                          Start rebuild
+                        </button>
+                        <button onClick={resetHandleChange} className="px-5 py-3 rounded-full bg-white/[0.03] text-zinc-400 text-xs font-bold hover:text-white hover:bg-white/[0.05] transition-colors">
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {rebuildResult && (
+                <div role="status" aria-live="polite" className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/15 text-sm text-emerald-100 leading-6">
+                  Rebuilt from @{rebuildResult.handle}. Archived {postCountCopy(rebuildResult.archivedCount)}.
+                </div>
+              )}
+            </div>
+          </motion.section>
+        )}
 
         {/* Playbook Section (Borderless Inline Accordion) */}
         {profile?.growth_strategy && (
@@ -284,6 +438,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                             type="password"
                             value={primaryGoogleKey}
                             onChange={(e) => setPrimaryGoogleKey(e.target.value)}
+                            disabled={rebuilding}
                             placeholder="AIza..."
                             className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
                           />
@@ -311,6 +466,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                                   type="password"
                                   value={k.value}
                                   onChange={(e) => setGoogleExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: e.target.value } : item))}
+                                  disabled={rebuilding}
                                   placeholder="AIza..."
                                   className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
                                 />
@@ -319,6 +475,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                             </div>
                             <motion.button
                               onClick={() => setGoogleExtras(prev => prev.filter((_, idx) => idx !== i))}
+                              disabled={rebuilding}
                               whileTap={{ scale: 0.95 }}
                               className="flex items-center justify-center w-12 h-[54px] rounded-xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] hover:border-red-500/20 hover:bg-red-500/10 text-zinc-600 hover:text-red-400 transition-colors shrink-0 shadow-sm"
                             >
@@ -331,6 +488,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                       <div className="pt-2">
                         <motion.button
                           onClick={() => setGoogleExtras(prev => [...prev, { value: '' }])}
+                          disabled={rebuilding}
                           whileTap={{ scale: 0.98 }}
                           className="flex items-center gap-2 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1"
                         >
@@ -360,6 +518,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                             type="password"
                             value={primaryZhipuKey}
                             onChange={(e) => setPrimaryZhipuKey(e.target.value)}
+                            disabled={rebuilding}
                             placeholder="ZAI_api_key..."
                             className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
                           />
@@ -376,6 +535,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                         {/* Apple style physical switch */}
                         <button
                           onClick={() => setCodingPlan(!codingPlan)}
+                          disabled={rebuilding}
                           className={cn(
                             "w-11 h-6 rounded-full relative p-0.5 transition-colors duration-300 flex items-center border shadow-[inset_0_1px_2px_rgba(0,0,0,0.4)]",
                             codingPlan 
@@ -412,6 +572,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                                   type="password"
                                   value={k.value}
                                   onChange={(e) => setZhipuExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: e.target.value } : item))}
+                                  disabled={rebuilding}
                                   placeholder="ZAI_api_key..."
                                   className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
                                 />
@@ -420,6 +581,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                             </div>
                             <motion.button
                               onClick={() => setZhipuExtras(prev => prev.filter((_, idx) => idx !== i))}
+                              disabled={rebuilding}
                               whileTap={{ scale: 0.95 }}
                               className="flex items-center justify-center w-12 h-[54px] rounded-xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] hover:border-red-500/20 hover:bg-red-500/10 text-zinc-600 hover:text-red-400 transition-colors shrink-0 shadow-sm"
                             >
@@ -432,6 +594,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
                       <div className="pt-2">
                         <motion.button
                           onClick={() => setZhipuExtras(prev => [...prev, { value: '' }])}
+                          disabled={rebuilding}
                           whileTap={{ scale: 0.98 }}
                           className="flex items-center gap-2 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1"
                         >
@@ -453,7 +616,7 @@ export default function Profile({ profile, onBack, onSaved }: ProfileProps) {
               <motion.button
                 onClick={handleSaveKeys}
                 whileTap={{ scale: 0.96 }}
-                disabled={saving || (!primaryGoogleKey.trim() && !primaryZhipuKey.trim() && !googleExtras.some(e => e.value.trim()) && !zhipuExtras.some(e => e.value.trim()))}
+                disabled={rebuilding || saving || (!primaryGoogleKey.trim() && !primaryZhipuKey.trim() && !googleExtras.some(e => e.value.trim()) && !zhipuExtras.some(e => e.value.trim()))}
                 className="group flex items-center gap-3 pl-5 pr-2 py-2 bg-white hover:bg-zinc-100 text-[#050507] rounded-full text-[13px] font-bold transition-all duration-300 disabled:opacity-30 disabled:pointer-events-none shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-white/[0.04]"
               >
                 {saving ? (
