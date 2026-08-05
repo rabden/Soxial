@@ -32,7 +32,7 @@ export function getSinceTimestamp(): number {
   return d.getTime()
 }
 
-function extractDataArray(result: CliResult): any[] {
+export function extractDataArray(result: CliResult): any[] {
   if (!result.ok || result.data == null) return []
   const d = result.data
   if (Array.isArray(d)) return d
@@ -157,7 +157,7 @@ function trimToLookback(items: any[], getTs: (item: any) => number): any[] {
   })
 }
 
-function toTwitterRows(items: any[], contentType: 'post' | 'reply', authorHandle?: string): SocialContentRow[] {
+export function toTwitterRows(items: any[], contentType: 'post' | 'reply', authorHandle?: string): SocialContentRow[] {
   return items
     .filter(item => item?.id != null)
     .map(item => {

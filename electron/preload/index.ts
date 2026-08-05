@@ -7,6 +7,14 @@ const api = {
   dbQuery: (table: string, where?: string, params?: any[]) => ipcRenderer.invoke('db:query', table, where, params),
   dbInsert: (table: string, data: Record<string, any>) => ipcRenderer.invoke('db:insert', table, data),
 
+  previewTwitterHandleRebuild: (handle: string) => ipcRenderer.invoke('twitterHandleRebuild:preview', handle),
+  startTwitterHandleRebuild: (handle: string, previewCount: number) => ipcRenderer.invoke('twitterHandleRebuild:start', handle, previewCount),
+  onTwitterHandleRebuildProgress: (cb: (event: { phase: string; message?: string; name?: string; args?: unknown; result?: unknown; text?: string; model?: string }) => void) => {
+    const listener = (_e: any, event: any) => cb(event)
+    ipcRenderer.on('twitterHandleRebuild:progress', listener)
+    return () => { ipcRenderer.off('twitterHandleRebuild:progress', listener) }
+  },
+
   checkCli: (name: 'twitter' | 'rdt') => ipcRenderer.invoke('cli:check', name),
   installCli: (name: 'twitter' | 'rdt') => ipcRenderer.invoke('cli:install', name),
   checkCliAuth: (name: 'twitter' | 'rdt') => ipcRenderer.invoke('cli:checkAuth', name),

@@ -529,6 +529,116 @@ export interface SocialContentRow {
   posted_at?: string | null
 }
 
+export interface TwitterHandleRebuildCutover {
+  twitterHandle: string
+  profile: {
+    niche: string
+    specialization: string
+    voice_description: string
+    avoid_words?: string | null
+    branding_strategy?: string | null
+    growth_strategy: string
+  }
+  hooks: Array<{ rank: number; category: string; name: string; description: string; why_it_works?: string | null; template?: string | null; niche_examples?: string | null; performance_notes?: string | null }>
+  pillars: Array<{ name: string; description: string; structure?: string | null; frequency?: string | null; platform_adaptations?: string | null }>
+  voiceRules: Array<{ type: string; content: string }>
+  targetAccounts: Array<{ platform: string; handle: string; tier?: string | null; why?: string | null; strategy?: string | null }>
+  replies: Array<{ platform: string; category: string; text: string }>
+  twitterSocialContent: SocialContentRow[]
+}
+
+export function countActiveTwitterScheduledPosts(db: Database.Database = getDb()): number {
+  const row = db.prepare("SELECT COUNT(*) as count FROM scheduled_posts WHERE platform = 'twitter' AND status IN ('draft', 'scheduled')").get() as { count: number }
+  return row.count
+}
+
+export function applyTwitterHandleRebuild(
+  data: TwitterHandleRebuildCutover,
+  options?: { db?: Database.Database; expectedActiveTwitterScheduledPostCount?: number; hasConflictingActivity?: () => boolean },
+): { profile: any; archivedCount: number } {
+  const db = options?.db || getDb()
+  if (options?.hasConflictingActivity?.()) throw new Error('Wait for active app generation to finish before rebuilding the profile source.')
+  if (options?.expectedActiveTwitterScheduledPostCount != null) {
+    const currentCount = countActiveTwitterScheduledPosts(db)
+    if (currentCount !== options.expectedActiveTwitterScheduledPostCount) throw new Error('Active Twitter draft/scheduled post count changed. Preview again before rebuilding.')
+  }
+  const tx = db.transaction((payload: TwitterHandleRebuildCutover) => {
+    const archived = db.prepare("UPDATE scheduled_posts SET status = 'archived' WHERE platform = 'twitter' AND status IN ('draft', 'scheduled')").run().changes
+
+    db.prepare(`UPDATE user_profile SET
+      twitter_handle = @twitterHandle,
+      niche = @niche,
+      specialization = @specialization,
+      voice_description = @voice_description,
+      avoid_words = @avoid_words,
+      branding_strategy = @branding_strategy,
+      growth_strategy = @growth_strategy
+      WHERE id = 1`).run({
+        twitterHandle: payload.twitterHandle,
+        ...payload.profile,
+        avoid_words: payload.profile.avoid_words ?? null,
+        branding_strategy: payload.profile.branding_strategy ?? null,
+      })
+
+    db.prepare('DELETE FROM hooks').run()
+    db.prepare('DELETE FROM content_pillars').run()
+    db.prepare('DELETE FROM voice_rules').run()
+    db.prepare('DELETE FROM target_accounts').run()
+    db.prepare('DELETE FROM replies').run()
+    db.prepare("DELETE FROM social_content WHERE platform = 'twitter'").run()
+    db.prepare('DELETE FROM quick_actions').run()
+
+    const insertHook = db.prepare(`INSERT INTO hooks (rank, category, name, description, why_it_works, template, niche_examples, performance_notes)
+      VALUES (@rank, @category, @name, @description, @why_it_works, @template, @niche_examples, @performance_notes)`)
+    const insertPillar = db.prepare(`INSERT INTO content_pillars (name, description, structure, frequency, platform_adaptations)
+      VALUES (@name, @description, @structure, @frequency, @platform_adaptations)`)
+    const insertVoice = db.prepare('INSERT INTO voice_rules (type, content) VALUES (@type, @content)')
+    const insertTarget = db.prepare('INSERT INTO target_accounts (platform, handle, tier, why, strategy) VALUES (@platform, @handle, @tier, @why, @strategy)')
+    const insertReply = db.prepare('INSERT INTO replies (platform, category, text) VALUES (@platform, @category, @text)')
+    const insertSocial = db.prepare(`INSERT INTO social_content (
+      platform, content_type, external_id, author_handle, subreddit, title, text, metrics_json, data_json, posted_at, fetched_at
+    ) VALUES (
+      @platform, @content_type, @external_id, @author_handle, @subreddit, @title, @text, @metrics_json, @data_json, @posted_at, datetime('now')
+    )`)
+
+    for (const row of payload.hooks) insertHook.run({
+      ...row,
+      why_it_works: row.why_it_works ?? null,
+      template: row.template ?? null,
+      niche_examples: row.niche_examples ?? null,
+      performance_notes: row.performance_notes ?? null,
+    })
+    for (const row of payload.pillars) insertPillar.run({
+      ...row,
+      structure: row.structure ?? null,
+      frequency: row.frequency ?? null,
+      platform_adaptations: row.platform_adaptations ?? null,
+    })
+    for (const row of payload.voiceRules) insertVoice.run(row)
+    for (const row of payload.targetAccounts) insertTarget.run({
+      ...row,
+      tier: row.tier ?? null,
+      why: row.why ?? null,
+      strategy: row.strategy ?? null,
+    })
+    for (const row of payload.replies) insertReply.run(row)
+    for (const row of payload.twitterSocialContent) insertSocial.run({
+      ...row,
+      author_handle: row.author_handle ?? null,
+      subreddit: row.subreddit ?? null,
+      title: row.title ?? null,
+      text: row.text ?? null,
+      metrics_json: row.metrics_json ?? null,
+      posted_at: row.posted_at ?? null,
+    })
+
+    return archived
+  })
+  const archivedCount = tx(data)
+  const profile = db.prepare('SELECT * FROM user_profile WHERE id = 1').get()
+  return { profile, archivedCount }
+}
+
 export function upsertSocialContent(items: SocialContentRow[]): { inserted: number; updated: number } {
   if (items.length === 0) return { inserted: 0, updated: 0 }
   const db = getDb()
