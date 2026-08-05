@@ -1,5 +1,7 @@
 "use client";
 
+// Sidebar: session list + navigation
+
 import { useState, useEffect } from 'react'
 import { Plus, CalendarClock, Settings, PanelLeftClose, Trash2, MessageSquare } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
