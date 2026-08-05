@@ -14,6 +14,11 @@ interface ProfileProps {
   onTwitterHandleRebuildRunningChange?: (running: boolean) => void;
 }
 
+function ipcErrorMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) return fallback
+  return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
+}
+
 export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebuilt, onTwitterHandleRebuildRunningChange }: ProfileProps) {
   const [activeTab, setActiveTab] = useState<'google' | 'zhipu'>('google')
   const [primaryGoogleKey, setPrimaryGoogleKey] = useState(profile?.gemini_api_key || '')
@@ -26,8 +31,6 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
   const [expandStrategy, setExpandStrategy] = useState(false)
   const [changingHandle, setChangingHandle] = useState(false)
   const [handleInput, setHandleInput] = useState('')
-  const [preview, setPreview] = useState<{ handle: string; activeTwitterScheduledPostCount: number } | null>(null)
-  const [previewing, setPreviewing] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const [rebuildPhase, setRebuildPhase] = useState('')
   const [rebuildError, setRebuildError] = useState('')
@@ -88,50 +91,34 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
   const resetHandleChange = () => {
     setChangingHandle(false)
     setHandleInput('')
-    setPreview(null)
     setRebuildError('')
     setRebuildPhase('')
     setRebuildResult(null)
   }
 
-  const handlePreview = async () => {
-    setPreviewing(true)
-    setRebuildError('')
-    setPreview(null)
-    setRebuildResult(null)
-    try {
-      setPreview(await window.api.previewTwitterHandleRebuild(handleInput))
-    } catch (err: any) {
-      setRebuildError(err?.message || 'Could not preview this X handle.')
-    } finally {
-      setPreviewing(false)
-    }
-  }
-
   const postCountCopy = (count: number) => `${count} active X draft/scheduled ${count === 1 ? 'post' : 'posts'}`
 
-  const handleStartRebuild = async (refreshPreview = false) => {
-    if (!preview) return
+  const handleStartRebuild = async () => {
+    if (!handleInput.trim()) return
     setRebuilding(true)
     onTwitterHandleRebuildRunningChange?.(true)
     setRebuildError('')
     setRebuildPhase('Checking selected X profile')
     let unsubscribe = () => {}
     try {
-      const nextPreview = refreshPreview ? await window.api.previewTwitterHandleRebuild(preview.handle) : preview
-      if (refreshPreview) setPreview(nextPreview)
+      const preview = await window.api.previewTwitterHandleRebuild(handleInput)
       unsubscribe = window.api.onTwitterHandleRebuildProgress((event) => {
         if (event.phase === 'cutover') setRebuildPhase('Applying rebuilt playbook')
         else if (event.phase === 'done') setRebuildPhase('Done')
         else if (event.phase === 'model' || event.phase === 'chunk' || event.phase === 'transientRetry' || event.phase === 'modelSwitch') setRebuildPhase('Rebuilding shared playbook')
         else setRebuildPhase('Checking and gathering source material')
       })
-      const result = await window.api.startTwitterHandleRebuild(nextPreview.handle, nextPreview.activeTwitterScheduledPostCount)
+      const result = await window.api.startTwitterHandleRebuild(preview.handle, preview.activeTwitterScheduledPostCount)
       setRebuildPhase('Done')
-      setRebuildResult({ handle: nextPreview.handle, archivedCount: result.archivedCount })
+      setRebuildResult({ handle: preview.handle, archivedCount: result.archivedCount })
       onTwitterHandleRebuilt?.()
-    } catch (err: any) {
-      setRebuildError(err?.message || 'Rebuild failed.')
+    } catch (err) {
+      setRebuildError(ipcErrorMessage(err, 'Rebuild failed.'))
     } finally {
       unsubscribe()
       setRebuilding(false)
@@ -223,7 +210,6 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                   onClick={() => {
                     setChangingHandle(true)
                     setHandleInput(profile.twitter_handle ? `@${profile.twitter_handle}` : '')
-                    setPreview(null)
                     setRebuildError('')
                     setRebuildResult(null)
                   }}
@@ -273,83 +259,58 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
               </div>
 
               {!rebuildResult && (
-                <div className="space-y-3">
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    <label className="sr-only" htmlFor="twitter-handle-rebuild-input">X handle</label>
-                    <input
-                      id="twitter-handle-rebuild-input"
-                      value={handleInput}
-                      onChange={(e) => {
-                        setHandleInput(e.target.value)
-                        setPreview(null)
-                        setRebuildError('')
-                      }}
-                      disabled={previewing || rebuilding}
-                      placeholder="@handle"
-                      className="flex-1 bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl px-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10 disabled:opacity-50"
-                    />
-                    <motion.button
-                      onClick={handlePreview}
-                      whileTap={{ scale: 0.97 }}
-                      disabled={previewing || rebuilding || !handleInput.trim()}
-                      className="px-5 py-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.06] text-xs font-bold text-white transition-colors disabled:opacity-30 disabled:pointer-events-none"
-                    >
-                      {previewing ? 'Checking...' : 'Preview'}
-                    </motion.button>
-                  </div>
+                <div className="space-y-5">
+                  <label className="sr-only" htmlFor="twitter-handle-rebuild-input">X handle</label>
+                  <input
+                    id="twitter-handle-rebuild-input"
+                    value={handleInput}
+                    onChange={(e) => {
+                      setHandleInput(e.target.value)
+                      setRebuildError('')
+                    }}
+                    disabled={rebuilding}
+                    placeholder="@handle"
+                    className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl px-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10 disabled:opacity-50"
+                  />
 
-                  {rebuildError && !rebuilding && !preview && (
-                    <div role="alert" className="p-4 rounded-2xl bg-red-500/10 border border-red-500/15 text-xs text-red-200 leading-5">
-                      {rebuildError}
+                  <div className="space-y-5 p-5 rounded-2xl bg-white/[0.015] border border-white/[0.04]">
+                    <div className="space-y-2 text-xs text-zinc-400 leading-5">
+                      <p>The entire shared cross-platform playbook will be rebuilt, including Reddit-related strategy.</p>
+                      <p>Any active X drafts and scheduled posts will be archived and hidden from the active schedule.</p>
+                      <p>Chats and settings remain.</p>
+                      <p>Existing setup stays intact if rebuilding fails.</p>
+                      <p>Likes/bookmarks are only used when the selected handle matches the signed-in X account.</p>
                     </div>
-                  )}
-                </div>
-              )}
-
-              {preview && !rebuildResult && (
-                <div className="space-y-5 p-5 rounded-2xl bg-white/[0.015] border border-white/[0.04]">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-white">
-                    Rebuild from
-                    <a href={`https://x.com/${preview.handle}`} target="_blank" rel="noreferrer" className="text-blue-300 hover:text-blue-200 transition-colors">
-                      x.com/{preview.handle}
-                    </a>
-                  </div>
-                  <div className="space-y-2 text-xs text-zinc-400 leading-5">
-                    <p>The entire shared cross-platform playbook will be rebuilt, including Reddit-related strategy.</p>
-                    <p>{postCountCopy(preview.activeTwitterScheduledPostCount)} will be archived and hidden from the active schedule.</p>
-                    <p>Chats and settings remain.</p>
-                    <p>Existing setup stays intact if rebuilding fails.</p>
-                    <p>Likes/bookmarks are only used when the selected handle matches the signed-in X account.</p>
-                  </div>
-                  {rebuilding ? (
-                    <div role="status" aria-live="polite" className="flex items-center gap-3 text-xs text-zinc-300 pt-1">
-                      <div className="w-3 h-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
-                      <span>{rebuildPhase}</span>
-                    </div>
-                  ) : rebuildError ? (
-                    <div className="space-y-4">
-                      <div role="alert" className="p-4 rounded-2xl bg-red-500/10 border border-red-500/15 text-xs text-red-200 leading-5">
-                        {rebuildError}
+                    {rebuilding ? (
+                      <div role="status" aria-live="polite" className="flex items-center gap-3 text-xs text-zinc-300 pt-1">
+                        <div className="w-3 h-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+                        <span>{rebuildPhase}</span>
                       </div>
-                      <div className="flex gap-3">
-                        <button onClick={() => handleStartRebuild(true)} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors">
-                          Retry
+                    ) : rebuildError ? (
+                      <div className="space-y-4">
+                        <div role="alert" className="p-4 rounded-2xl bg-red-500/10 border border-red-500/15 text-xs text-red-200 leading-5">
+                          {rebuildError}
+                        </div>
+                        <div className="flex gap-3">
+                          <button onClick={handleStartRebuild} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors">
+                            Retry rebuild
+                          </button>
+                          <button onClick={resetHandleChange} className="px-5 py-3 rounded-full bg-white/[0.03] text-zinc-400 text-xs font-bold hover:text-white hover:bg-white/[0.05] transition-colors">
+                            Back
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                        <button onClick={handleStartRebuild} disabled={!handleInput.trim()} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors disabled:opacity-30 disabled:pointer-events-none">
+                          Start rebuild
                         </button>
                         <button onClick={resetHandleChange} className="px-5 py-3 rounded-full bg-white/[0.03] text-zinc-400 text-xs font-bold hover:text-white hover:bg-white/[0.05] transition-colors">
-                          Back
+                          Cancel
                         </button>
                       </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                      <button onClick={() => handleStartRebuild()} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors">
-                        Start rebuild
-                      </button>
-                      <button onClick={resetHandleChange} className="px-5 py-3 rounded-full bg-white/[0.03] text-zinc-400 text-xs font-bold hover:text-white hover:bg-white/[0.05] transition-colors">
-                        Cancel
-                      </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               )}
 
