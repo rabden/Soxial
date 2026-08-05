@@ -7,6 +7,7 @@ import { getDb, getProfile, updateProfile, queryAll, insertRow, createChatSessio
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, checkCli, checkCliAuth, runCli } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
 import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, createChatTools, installChatAnswerListener, clearPendingChatQuestions, ONBOARDING_MODEL_FALLBACK, CHAT_MODEL_FALLBACK_PRO, CHAT_MODEL_FALLBACK_FREE, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
+import { isTwitterHandleRebuildActive, previewTwitterHandleRebuild, startTwitterHandleRebuild } from './twitter-handle-rebuild'
 import { detectApiTier } from './api-tier'
 import { logger } from './log'
 
@@ -200,6 +201,9 @@ interface ActiveChatRun {
   injectedMessages: Message[]
 }
 const activeChatRuns = new Map<number, ActiveChatRun>()
+let activeOnboardingRuns = 0
+let activeChatRunsCount = 0
+let quickActionsActive = false
 
 function setupIpc() {
   logger.info('main', 'registering IPC handlers')
@@ -224,6 +228,16 @@ function setupIpc() {
   ipcMain.handle('db:insert', (_e, table: string, data: Record<string, any>) => {
     logger.debug('main', `db:insert ${table}`, Object.keys(data))
     return insertRow(table, data)
+  })
+
+  ipcMain.handle('twitterHandleRebuild:preview', (_e, handle: string) => {
+    logger.info('main', 'twitterHandleRebuild:preview')
+    return previewTwitterHandleRebuild(handle)
+  })
+
+  ipcMain.handle('twitterHandleRebuild:start', async (_e, handle: string, previewCount: number) => {
+    logger.info('main', 'twitterHandleRebuild:start')
+    return startTwitterHandleRebuild(handle, previewCount, mainWindow, () => activeChatRunsCount > 0 || activeOnboardingRuns > 0 || quickActionsActive)
   })
 
   ipcMain.handle('cli:check', async (_e, name: 'twitter' | 'rdt') => checkCli(name))
@@ -253,196 +267,204 @@ function setupIpc() {
 
   ipcMain.handle('onboarding:run', async (_e, profileData: Record<string, any>, continueFromMessages?: any[]) => {
     logger.info('main', 'onboarding:run started', Object.keys(profileData))
-    updateProfile(profileData)
-    const profile = getProfile()
-    clearPendingQuestions()
-
-    const sendChunk = (text: string) => mainWindow?.webContents.send('onboarding:chunk', text)
-    const sendToolCall = (name: string, args: any) => mainWindow?.webContents.send('onboarding:toolCall', { name, args })
-    const sendToolResult = (name: string, result: any) => mainWindow?.webContents.send('onboarding:toolResult', { name, result })
-    const sendQuestions = (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) =>
-      mainWindow?.webContents.send('onboarding:question', payload)
-
-    // ─── Phase 0: Detect API tier (silent background) ───────────────────────
-    try {
-      const tier = await detectApiTier()
-      logger.info('main', `detected API tier: ${tier}`)
-    } catch (err) {
-      logger.warn('main', `tier detection failed, assuming free tier: ${(err as Error).message}`)
-      setApiTier('free')
+    if (isTwitterHandleRebuildActive()) {
+      return { success: false, error: 'Wait for the Twitter handle rebuild to finish before starting onboarding.' }
     }
+    activeOnboardingRuns++
+    try {
+      updateProfile(profileData)
+      const profile = getProfile()
+      clearPendingQuestions()
 
-    // ─── Phase 1: Auto-gather data (skip if continuing from previous attempt) ───────
-    if (!continueFromMessages || continueFromMessages.length === 0) {
-      // Allow UI to render before starting heavy work
-      await new Promise(resolve => setTimeout(resolve, 10))
-      sendChunk('PHASE:gather')
+      const sendChunk = (text: string) => mainWindow?.webContents.send('onboarding:chunk', text)
+      const sendToolCall = (name: string, args: any) => mainWindow?.webContents.send('onboarding:toolCall', { name, args })
+      const sendToolResult = (name: string, result: any) => mainWindow?.webContents.send('onboarding:toolResult', { name, result })
+      const sendQuestions = (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) =>
+        mainWindow?.webContents.send('onboarding:question', payload)
 
-      // Auth gate helper: block until each platform the user entered is authenticated.
-      const wantTwitter = !!profile?.twitter_handle
-      const wantReddit = !!profile?.reddit_username
-      const waitForPlatformAuth = async (): Promise<{ aborted: boolean; twitter?: any; reddit?: any }> => {
-        while (true) {
-          let twitterRes: any
-          let redditRes: any
-          if (wantTwitter) {
-            sendToolCall('twitter_status', {})
-            try {
-              twitterRes = await ensureTwitterAuth()
-            } catch (e: any) {
-              twitterRes = { ok: false, error: 'X connection check failed' }
-              logger.error('main', 'ensureTwitterAuth threw', e)
-            }
-            sendToolResult('twitter_status', twitterRes)
-          }
-          if (wantReddit) {
-            sendToolCall('reddit_login', {})
-            try {
-              redditRes = await ensureRdtAuth()
-            } catch (e: any) {
-              redditRes = { ok: false, error: 'Reddit connection check failed' }
-              logger.error('main', 'ensureRdtAuth threw', e)
-            }
-            sendToolResult('reddit_login', redditRes)
-          }
-          const twitterOk = !wantTwitter || twitterRes?.ok
-          const redditOk = !wantReddit || redditRes?.ok
-          if (twitterOk && redditOk) {
-            return { aborted: false, twitter: twitterRes, reddit: redditRes }
-          }
-          // Block: ask the user to log in, wait for their "Logged in" / "Back" signal.
-          const id = `auth_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-          mainWindow?.webContents.send('onboarding:authRequired', {
-            id,
-            twitter: { needed: wantTwitter, ok: twitterOk },
-            reddit: { needed: wantReddit, ok: redditOk },
-          })
-          const retry = await new Promise<boolean>((resolve) => pendingAuthRetries.set(id, resolve))
-          if (!retry) return { aborted: true }
-        }
-      }
-
-      // Install platform connectors
-      sendToolCall('connect_twitter', {})
-      sendToolCall('connect_reddit', {})
+      // ─── Phase 0: Detect API tier (silent background) ───────────────────────
       try {
-        await Promise.all([ensureCliInstalled('twitter'), ensureCliInstalled('rdt')])
-        sendToolResult('connect_twitter', { ok: true })
-        sendToolResult('connect_reddit', { ok: true })
+        const tier = await detectApiTier()
+        logger.info('main', `detected API tier: ${tier}`)
       } catch (err) {
-        logger.error('main', 'platform connector setup failed', err)
-        sendToolResult('connect_twitter', { ok: false, error: 'X connector setup failed' })
-        sendToolResult('connect_reddit', { ok: false, error: 'Reddit connector setup failed' })
+        logger.warn('main', `tier detection failed, assuming free tier: ${(err as Error).message}`)
+        setApiTier('free')
       }
 
-      // Auth gate — per-platform: only require the platforms the user entered.
-      const auth = await waitForPlatformAuth()
-      if (auth.aborted) {
-        logger.info('main', 'onboarding auth gate aborted by user')
-        return { success: false, aborted: true }
+      // ─── Phase 1: Auto-gather data (skip if continuing from previous attempt) ───────
+      if (!continueFromMessages || continueFromMessages.length === 0) {
+        // Allow UI to render before starting heavy work
+        await new Promise(resolve => setTimeout(resolve, 10))
+        sendChunk('PHASE:gather')
+
+        // Auth gate helper: block until each platform the user entered is authenticated.
+        const wantTwitter = !!profile?.twitter_handle
+        const wantReddit = !!profile?.reddit_username
+        const waitForPlatformAuth = async (): Promise<{ aborted: boolean; twitter?: any; reddit?: any }> => {
+          while (true) {
+            let twitterRes: any
+            let redditRes: any
+            if (wantTwitter) {
+              sendToolCall('twitter_status', {})
+              try {
+                twitterRes = await ensureTwitterAuth()
+              } catch (e: any) {
+                twitterRes = { ok: false, error: 'X connection check failed' }
+                logger.error('main', 'ensureTwitterAuth threw', e)
+              }
+              sendToolResult('twitter_status', twitterRes)
+            }
+            if (wantReddit) {
+              sendToolCall('reddit_login', {})
+              try {
+                redditRes = await ensureRdtAuth()
+              } catch (e: any) {
+                redditRes = { ok: false, error: 'Reddit connection check failed' }
+                logger.error('main', 'ensureRdtAuth threw', e)
+              }
+              sendToolResult('reddit_login', redditRes)
+            }
+            const twitterOk = !wantTwitter || twitterRes?.ok
+            const redditOk = !wantReddit || redditRes?.ok
+            if (twitterOk && redditOk) {
+              return { aborted: false, twitter: twitterRes, reddit: redditRes }
+            }
+            // Block: ask the user to log in, wait for their "Logged in" / "Back" signal.
+            const id = `auth_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+            mainWindow?.webContents.send('onboarding:authRequired', {
+              id,
+              twitter: { needed: wantTwitter, ok: twitterOk },
+              reddit: { needed: wantReddit, ok: redditOk },
+            })
+            const retry = await new Promise<boolean>((resolve) => pendingAuthRetries.set(id, resolve))
+            if (!retry) return { aborted: true }
+          }
+        }
+
+        // Install platform connectors
+        sendToolCall('connect_twitter', {})
+        sendToolCall('connect_reddit', {})
+        try {
+          await Promise.all([ensureCliInstalled('twitter'), ensureCliInstalled('rdt')])
+          sendToolResult('connect_twitter', { ok: true })
+          sendToolResult('connect_reddit', { ok: true })
+        } catch (err) {
+          logger.error('main', 'platform connector setup failed', err)
+          sendToolResult('connect_twitter', { ok: false, error: 'X connector setup failed' })
+          sendToolResult('connect_reddit', { ok: false, error: 'Reddit connector setup failed' })
+        }
+
+        // Auth gate — per-platform: only require the platforms the user entered.
+        const auth = await waitForPlatformAuth()
+        if (auth.aborted) {
+          logger.info('main', 'onboarding auth gate aborted by user')
+          return { success: false, aborted: true }
+        }
+
+        const profileSafe = (({ zai_api_key, gemini_api_key, openai_api_key, puter_token, ...rest }) => rest)(profile || {})
+        const gathered: Record<string, any> = { profile: profileSafe }
+
+        if (auth.reddit) gathered.reddit_login = auth.reddit
+        if (auth.twitter) gathered.twitter_status = auth.twitter
+
+        const socialData = await gatherOnboardingSocialData(profile || {}, {
+          onToolCall: sendToolCall,
+          onToolResult: sendToolResult,
+        })
+        Object.assign(gathered, socialData)
+
+        const db = getDb()
+        gathered.algorithm_rules = db.prepare('SELECT * FROM algorithm_rules').all()
+        gathered.voice_rules = db.prepare('SELECT * FROM voice_rules').all()
+        gathered.hooks = db.prepare('SELECT * FROM hooks ORDER BY rank ASC').all()
+        gathered.content_pillars = db.prepare('SELECT * FROM content_pillars').all()
+
+        // ─── Phase 2: Interactive AI onboarding ──────────────────────────────────
+        sendChunk('PHASE:interview')
+
+        const compacted = compactGatheredData(gathered)
+        const snippets: string[] = ['=== AUTO-GATHERED DATA ===\nAnalyze this data, then ask ALL your interview questions in a single ask_user_questions tool call.\n']
+        for (const [key, val] of Object.entries(compacted)) {
+          snippets.push(`--- ${key} ---\n${JSON.stringify(val, null, 2)}`)
+        }
+        snippets.push(`\nIMPORTANT: The user already told you their name is "${profile?.name || 'unknown'}", X handle is "${profile?.twitter_handle || 'not set'}", Reddit is "u/${profile?.reddit_username || 'not set'}". DO NOT re-ask these. Call ask_user_questions ONCE with all questions you genuinely need, then build their full strategy profile using bulk save tools.`)
+
+        const onboardingTools = createOnboardingTools(sendQuestions)
+        const messages: { role: string; content: string | null; tool_call_id?: string; tool_calls?: any[] }[] = [
+          { role: 'user', content: snippets.join('\n\n') }
+        ]
+
+        const msgSize = snippets.join('\n\n').length
+        logger.info('main', `starting interactive onboarding agent (message size: ${(msgSize / 1024).toFixed(1)}KB)`)
+        const result = await new Promise<{ text: string; error?: string }>((resolve) => {
+          runAgent(
+            messages,
+            (chunk) => sendChunk(chunk),
+            (name, args) => sendToolCall(name, args),
+            (name, result) => sendToolResult(name, result),
+            (text) => resolve({ text }),
+            (error) => resolve({ text: '', error }),
+            (text) => mainWindow?.webContents.send('onboarding:reasoning', text),
+            (info) => mainWindow?.webContents.send('onboarding:transientRetry', info),
+            { maxSteps: 60, fallbackChain: getOnboardingFallbackChain() },
+            onboardingTools,
+            ONBOARDING_SYSTEM_PROMPT
+          )
+        })
+
+        if (result.error) {
+          logger.error('main', `onboarding failed: ${result.error}`)
+          return { success: false, error: result.error }
+        }
+
+        logger.info('main', `onboarding complete (${result.text.length} chars)`)
+        if (!result.text || result.text.trim().length === 0) {
+          // Agent ended without producing a strategy (e.g. stream aborted mid-tool). Surface as retryable.
+          logger.warn('main', 'onboarding produced empty output — returning retryable error')
+          return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
+        }
+        updateProfile({ onboarding_complete: 1 })
+        generateQuickActions().catch(() => {})
+        return { success: true, summary: result.text }
+      } else {
+        // Continue from previous attempt - skip data gathering, go straight to AI
+        logger.info('main', `continuing onboarding from ${continueFromMessages.length} messages`)
+        sendChunk('PHASE:interview')
+
+        const onboardingTools = createOnboardingTools(sendQuestions)
+
+        const result = await new Promise<{ text: string; error?: string }>((resolve) => {
+          runAgent(
+            continueFromMessages,
+            (chunk) => sendChunk(chunk),
+            (name, args) => sendToolCall(name, args),
+            (name, result) => sendToolResult(name, result),
+            (text) => resolve({ text }),
+            (error) => resolve({ text: '', error }),
+            (text) => mainWindow?.webContents.send('onboarding:reasoning', text),
+            (info) => mainWindow?.webContents.send('onboarding:transientRetry', info),
+            { maxSteps: 60, fallbackChain: getOnboardingFallbackChain() },
+            onboardingTools,
+            ONBOARDING_SYSTEM_PROMPT
+          )
+        })
+
+        if (result.error) {
+          logger.error('main', `onboarding continuation failed: ${result.error}`)
+          return { success: false, error: result.error }
+        }
+
+        logger.info('main', `onboarding continuation complete (${result.text.length} chars)`)
+        if (!result.text || result.text.trim().length === 0) {
+          logger.warn('main', 'onboarding continuation produced empty output — returning retryable error')
+          return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
+        }
+        updateProfile({ onboarding_complete: 1 })
+        generateQuickActions().catch(() => {})
+        return { success: true, summary: result.text }
       }
-
-      const profileSafe = (({ zai_api_key, gemini_api_key, openai_api_key, puter_token, ...rest }) => rest)(profile || {})
-      const gathered: Record<string, any> = { profile: profileSafe }
-
-      if (auth.reddit) gathered.reddit_login = auth.reddit
-      if (auth.twitter) gathered.twitter_status = auth.twitter
-
-      const socialData = await gatherOnboardingSocialData(profile || {}, {
-        onToolCall: sendToolCall,
-        onToolResult: sendToolResult,
-      })
-      Object.assign(gathered, socialData)
-
-      const db = getDb()
-      gathered.algorithm_rules = db.prepare('SELECT * FROM algorithm_rules').all()
-      gathered.voice_rules = db.prepare('SELECT * FROM voice_rules').all()
-      gathered.hooks = db.prepare('SELECT * FROM hooks ORDER BY rank ASC').all()
-      gathered.content_pillars = db.prepare('SELECT * FROM content_pillars').all()
-
-      // ─── Phase 2: Interactive AI onboarding ──────────────────────────────────
-      sendChunk('PHASE:interview')
-
-      const compacted = compactGatheredData(gathered)
-      const snippets: string[] = ['=== AUTO-GATHERED DATA ===\nAnalyze this data, then ask ALL your interview questions in a single ask_user_questions tool call.\n']
-      for (const [key, val] of Object.entries(compacted)) {
-        snippets.push(`--- ${key} ---\n${JSON.stringify(val, null, 2)}`)
-      }
-      snippets.push(`\nIMPORTANT: The user already told you their name is "${profile?.name || 'unknown'}", X handle is "${profile?.twitter_handle || 'not set'}", Reddit is "u/${profile?.reddit_username || 'not set'}". DO NOT re-ask these. Call ask_user_questions ONCE with all questions you genuinely need, then build their full strategy profile using bulk save tools.`)
-
-      const onboardingTools = createOnboardingTools(sendQuestions)
-      const messages: { role: string; content: string | null; tool_call_id?: string; tool_calls?: any[] }[] = [
-        { role: 'user', content: snippets.join('\n\n') }
-      ]
-
-      const msgSize = snippets.join('\n\n').length
-      logger.info('main', `starting interactive onboarding agent (message size: ${(msgSize / 1024).toFixed(1)}KB)`)
-      const result = await new Promise<{ text: string; error?: string }>((resolve) => {
-        runAgent(
-          messages,
-          (chunk) => sendChunk(chunk),
-          (name, args) => sendToolCall(name, args),
-          (name, result) => sendToolResult(name, result),
-          (text) => resolve({ text }),
-          (error) => resolve({ text: '', error }),
-          (text) => mainWindow?.webContents.send('onboarding:reasoning', text),
-          (info) => mainWindow?.webContents.send('onboarding:transientRetry', info),
-          { maxSteps: 60, fallbackChain: getOnboardingFallbackChain() },
-          onboardingTools,
-          ONBOARDING_SYSTEM_PROMPT
-        )
-      })
-
-      if (result.error) {
-        logger.error('main', `onboarding failed: ${result.error}`)
-        return { success: false, error: result.error }
-      }
-
-      logger.info('main', `onboarding complete (${result.text.length} chars)`)
-      if (!result.text || result.text.trim().length === 0) {
-        // Agent ended without producing a strategy (e.g. stream aborted mid-tool). Surface as retryable.
-        logger.warn('main', 'onboarding produced empty output — returning retryable error')
-        return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
-      }
-      updateProfile({ onboarding_complete: 1 })
-      generateQuickActions().catch(() => {})
-      return { success: true, summary: result.text }
-    } else {
-      // Continue from previous attempt - skip data gathering, go straight to AI
-      logger.info('main', `continuing onboarding from ${continueFromMessages.length} messages`)
-      sendChunk('PHASE:interview')
-
-      const onboardingTools = createOnboardingTools(sendQuestions)
-      
-      const result = await new Promise<{ text: string; error?: string }>((resolve) => {
-        runAgent(
-          continueFromMessages,
-          (chunk) => sendChunk(chunk),
-          (name, args) => sendToolCall(name, args),
-          (name, result) => sendToolResult(name, result),
-          (text) => resolve({ text }),
-          (error) => resolve({ text: '', error }),
-          (text) => mainWindow?.webContents.send('onboarding:reasoning', text),
-          (info) => mainWindow?.webContents.send('onboarding:transientRetry', info),
-          { maxSteps: 60, fallbackChain: getOnboardingFallbackChain() },
-          onboardingTools,
-          ONBOARDING_SYSTEM_PROMPT
-        )
-      })
-
-      if (result.error) {
-        logger.error('main', `onboarding continuation failed: ${result.error}`)
-        return { success: false, error: result.error }
-      }
-
-      logger.info('main', `onboarding continuation complete (${result.text.length} chars)`)
-      if (!result.text || result.text.trim().length === 0) {
-        logger.warn('main', 'onboarding continuation produced empty output — returning retryable error')
-        return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
-      }
-      updateProfile({ onboarding_complete: 1 })
-      generateQuickActions().catch(() => {})
-      return { success: true, summary: result.text }
+    } finally {
+      activeOnboardingRuns--
     }
   })
 
@@ -505,7 +527,11 @@ function setupIpc() {
 
   ipcMain.handle('chat:send', async (_e, messages: Message[], options?: { model?: string; effort?: string }, sessionId?: number) => {
     logger.info('main', `chat:send — ${messages.length} messages (session ${sessionId ?? 'none'})`, options)
+    if (isTwitterHandleRebuildActive()) {
+      return { fullText: '', error: 'Wait for the Twitter handle rebuild to finish before sending a chat message.' }
+    }
 
+    activeChatRunsCount++
     const sid = sessionId ?? 0
     const run: ActiveChatRun = {
       abortController: new AbortController(),
@@ -568,6 +594,7 @@ function setupIpc() {
       return { fullText: chunks.join('') }
     } finally {
       activeChatRuns.delete(sid)
+      activeChatRunsCount--
     }
   })
 
@@ -773,20 +800,27 @@ async function generateQuickActions(): Promise<string[]> {
     logger.info('main', `cached quick actions expired (${ageHours.toFixed(1)}h)`)
   }
 
-  const context = getQuickActionsContext()
-  const text = await generateText([
-    { role: 'user', content: `Based on this profile and strategy context, suggest 5 specific, actionable things the user could ask their social media AI agent to do right now. Each suggestion must be a single concise sentence under 10 words. Return them as a JSON array of strings, no markdown, no numbering.\n\nContext:\n${context}` }
-  ], 'You generate personalized quick-action suggestions for a social media AI agent app.', { model: getQuickActionModel() })
-  let suggestions: string[]
+  if (isTwitterHandleRebuildActive()) throw new Error('Twitter handle rebuild is active')
+  if (quickActionsActive) throw new Error('Quick-action generation is already active')
+  quickActionsActive = true
   try {
-    const parsed = JSON.parse(text)
-    suggestions = Array.isArray(parsed) ? parsed.slice(0, 5) : FALLBACK_ACTIONS
-  } catch {
-    suggestions = FALLBACK_ACTIONS
+    const context = getQuickActionsContext()
+    const text = await generateText([
+      { role: 'user', content: `Based on this profile and strategy context, suggest 5 specific, actionable things the user could ask their social media AI agent to do right now. Each suggestion must be a single concise sentence under 10 words. Return them as a JSON array of strings, no markdown, no numbering.\n\nContext:\n${context}` }
+    ], 'You generate personalized quick-action suggestions for a social media AI agent app.', { model: getQuickActionModel() })
+    let suggestions: string[]
+    try {
+      const parsed = JSON.parse(text)
+      suggestions = Array.isArray(parsed) ? parsed.slice(0, 5) : FALLBACK_ACTIONS
+    } catch {
+      suggestions = FALLBACK_ACTIONS
+    }
+    setQuickActions(suggestions)
+    logger.info('main', 'quick actions generated')
+    return suggestions
+  } finally {
+    quickActionsActive = false
   }
-  setQuickActions(suggestions)
-  logger.info('main', 'quick actions generated')
-  return suggestions
 }
 
 function extractItems(val: any): any[] {
