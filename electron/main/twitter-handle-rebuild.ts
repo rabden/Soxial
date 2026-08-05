@@ -130,36 +130,37 @@ async function gatherEvidence(handle: string, progress: (event: Progress) => voi
   progress({ phase: 'toolResult', name: 'twitter_user_posts', result: compactTwitterForModel(posts) })
 
   progress({ phase: 'toolCall', name: 'twitter_replies', args: { handle, max: MAX_SOCIAL_ITEMS, since: getSinceDate() } })
-  const replies = await fetchTwitterReplies(handle)
-  assertOk('twitter_replies', replies)
-  progress({ phase: 'toolResult', name: 'twitter_replies', result: compactTwitterForModel(replies) })
+  const repliesResult = await fetchTwitterReplies(handle)
+  const replies = repliesResult.ok ? repliesResult : { ok: true, data: [] }
+  if (!repliesResult.ok) logger.warn('twitter-handle-rebuild', `twitter_replies unavailable: ${repliesResult.error}`)
+  progress({ phase: 'toolResult', name: 'twitter_replies', result: repliesResult.ok ? compactTwitterForModel(repliesResult) : repliesResult })
 
   progress({ phase: 'toolCall', name: 'twitter_following', args: { handle, max: 50 } })
   const following = await runTwitterCli(['following', handle, '--json', '-n', '50'])
-  assertOk('twitter_following', following)
-  progress({ phase: 'toolResult', name: 'twitter_following', result: compactTwitterAccounts(following) })
+  if (!following.ok) logger.warn('twitter-handle-rebuild', `twitter_following unavailable: ${following.error}`)
+  progress({ phase: 'toolResult', name: 'twitter_following', result: following.ok ? compactTwitterAccounts(following) : following })
 
   const evidence: Record<string, unknown> = {
     twitter_whoami: compactTwitterProfile(whoami),
     twitter_user: compactTwitterProfile(user),
     twitter_user_posts: compactTwitterForModel(posts),
     twitter_replies: compactTwitterForModel(replies),
-    twitter_following: compactTwitterAccounts(following),
   }
+  if (following.ok) evidence.twitter_following = compactTwitterAccounts(following)
 
   const authHandle = whoami.data?.user?.screenName || whoami.data?.user?.username || auth.data?.user?.username || auth.data?.user?.screenName
   if (authHandle && authHandle.toLowerCase() === handle.toLowerCase()) {
     progress({ phase: 'toolCall', name: 'twitter_likes', args: { handle: authHandle, max: 30 } })
     const likes = await runTwitterCli(['likes', authHandle, '--json', '-n', '30'], { compact: false })
-    assertOk('twitter_likes', likes)
-    evidence.twitter_likes = compactTwitterForModel(likes)
-    progress({ phase: 'toolResult', name: 'twitter_likes', result: evidence.twitter_likes })
+    if (likes.ok) evidence.twitter_likes = compactTwitterForModel(likes)
+    else logger.warn('twitter-handle-rebuild', `twitter_likes unavailable: ${likes.error}`)
+    progress({ phase: 'toolResult', name: 'twitter_likes', result: likes.ok ? evidence.twitter_likes : likes })
 
     progress({ phase: 'toolCall', name: 'twitter_bookmarks', args: { max: 20 } })
     const bookmarks = await runTwitterCli(['bookmarks', '--json', '-n', '20'], { compact: false })
-    assertOk('twitter_bookmarks', bookmarks)
-    evidence.twitter_bookmarks = compactTwitterForModel(bookmarks)
-    progress({ phase: 'toolResult', name: 'twitter_bookmarks', result: evidence.twitter_bookmarks })
+    if (bookmarks.ok) evidence.twitter_bookmarks = compactTwitterForModel(bookmarks)
+    else logger.warn('twitter-handle-rebuild', `twitter_bookmarks unavailable: ${bookmarks.error}`)
+    progress({ phase: 'toolResult', name: 'twitter_bookmarks', result: bookmarks.ok ? evidence.twitter_bookmarks : bookmarks })
   }
 
   const profile = getProfile()
@@ -169,21 +170,21 @@ async function gatherEvidence(handle: string, progress: (event: Progress) => voi
 
     progress({ phase: 'toolCall', name: 'reddit_user', args: { username } })
     const redditUser = await runCli('rdt', ['user', username, '--json'])
-    assertOk('reddit_user', redditUser)
-    evidence.reddit_user = compactRedditProfile(redditUser)
-    progress({ phase: 'toolResult', name: 'reddit_user', result: evidence.reddit_user })
+    if (redditUser.ok) evidence.reddit_user = compactRedditProfile(redditUser)
+    else logger.warn('twitter-handle-rebuild', `reddit_user unavailable: ${redditUser.error}`)
+    progress({ phase: 'toolResult', name: 'reddit_user', result: redditUser.ok ? evidence.reddit_user : redditUser })
 
     progress({ phase: 'toolCall', name: 'reddit_user_posts', args: { username, max: MAX_SOCIAL_ITEMS, since: getSinceDate() } })
     const redditPosts = await fetchRedditUserPosts(username)
-    assertOk('reddit_user_posts', redditPosts)
-    evidence.reddit_user_posts = compactRedditForModel(redditPosts)
-    progress({ phase: 'toolResult', name: 'reddit_user_posts', result: evidence.reddit_user_posts })
+    if (redditPosts.ok) evidence.reddit_user_posts = compactRedditForModel(redditPosts)
+    else logger.warn('twitter-handle-rebuild', `reddit_user_posts unavailable: ${redditPosts.error}`)
+    progress({ phase: 'toolResult', name: 'reddit_user_posts', result: redditPosts.ok ? evidence.reddit_user_posts : redditPosts })
 
     progress({ phase: 'toolCall', name: 'reddit_user_comments', args: { username, max: MAX_SOCIAL_ITEMS, since: getSinceDate() } })
     const redditComments = await fetchRedditUserComments(username)
-    assertOk('reddit_user_comments', redditComments)
-    evidence.reddit_user_comments = compactRedditForModel(redditComments)
-    progress({ phase: 'toolResult', name: 'reddit_user_comments', result: evidence.reddit_user_comments })
+    if (redditComments.ok) evidence.reddit_user_comments = compactRedditForModel(redditComments)
+    else logger.warn('twitter-handle-rebuild', `reddit_user_comments unavailable: ${redditComments.error}`)
+    progress({ phase: 'toolResult', name: 'reddit_user_comments', result: redditComments.ok ? evidence.reddit_user_comments : redditComments })
   }
 
   return {
