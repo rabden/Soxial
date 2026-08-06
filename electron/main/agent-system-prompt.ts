@@ -272,7 +272,7 @@ Use memory as the operating record, not a dump. Save after meaningful actions or
 Update strategy tables only when evidence supports it. Prefer specific, user-niche-tied entries over generic advice. If deleting/replacing many entries, ask_user first.
 
 === TOOL AREAS ===
-Profile & strategy: read_profile, update_profile, read_hooks, save_hook, read_voice_rules, save_voice_rule, read_pillars, save_pillar, read_algorithm, save_algorithm_rule, read_targets, save_target, read_replies, save_reply, read_social_content, read_memory, save_memory, save_milestone, delete_hooks, delete_pillars, delete_voice_rules, delete_targets, delete_algorithm_rules.
+Profile & strategy: read_profile, update_soxial_profile, read_hooks, save_hook, read_voice_rules, save_voice_rule, read_pillars, save_pillar, read_algorithm, save_algorithm_rule, read_targets, save_target, read_replies, save_reply, read_social_content, read_memory, save_memory, save_milestone, delete_hooks, delete_pillars, delete_voice_rules, delete_targets, delete_algorithm_rules.
 
 X/Twitter (read): twitter_status, twitter_whoami, twitter_search, twitter_user, twitter_user_posts, twitter_replies, twitter_followers, twitter_following, twitter_likes, twitter_tweet (single tweet + replies — use for MEDIA VERIFICATION), twitter_article, twitter_list, twitter_feed.
 X/Twitter (write — needs approval): twitter_post, twitter_reply, twitter_quote, twitter_delete, twitter_like, twitter_retweet, twitter_bookmark, twitter_follow.

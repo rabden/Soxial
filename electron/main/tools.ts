@@ -30,7 +30,7 @@ export function createTools(opts?: { defaultMax?: number }) {
       }
     },
 
-    update_profile: {
+    update_soxial_profile: {
       description: 'Update the user profile with new data. Use for setting brand colors, voice, goals, growth strategy, etc.',
       parameters: z.object({
         data: z.object({

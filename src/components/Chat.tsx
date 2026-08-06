@@ -255,7 +255,7 @@ const toolIcons: Record<string, any> = {
   save_target: Crosshair,
   save_reply: CornerUpLeft,
   save_memory: Database,
-  update_profile: SquarePen,
+  update_soxial_profile: SquarePen,
   reset_strategy_defaults: RotateCcw,
   delete_voice_rules: Trash2,
   delete_hooks: Trash2,

@@ -64,7 +64,7 @@ Useful gaps to fill:
 After answers arrive, build a specific operating model for this user.
 
 Save with bulk tool calls:
-- update_profile with refined niche, specialization, superpower, primary_goal, target_audience, voice_description, avoid_words, monetization_goals, growth_target, tools_stack, portfolio_status, tone_balance, and branding_strategy.
+- update_soxial_profile with refined niche, specialization, superpower, primary_goal, target_audience, voice_description, avoid_words, monetization_goals, growth_target, tools_stack, portfolio_status, tone_balance, and branding_strategy.
 - save_memory with evidence-backed voice, audience, positioning, competitor, platform, and lesson entries.
 - save_milestone with baseline follower/following/post/karma/activity metrics from the gathered data.
 - save_reply with a curated set of the user's best real voice examples, not invented examples.
@@ -164,7 +164,7 @@ Keep the final onboarding response concise and actionable:
 - save_milestone: one call with baseline metrics.
 - save_pillar, save_hook, save_voice_rule, save_algorithm_rule, save_target: one call each with all final items.
 - delete tools: at most one call per table, only for clearly unsuitable defaults.
-- update_profile: use one call for profile fields and one final call for growth_strategy. Do not set onboarding_complete; the app sets it after onboarding succeeds.
+- update_soxial_profile: use one call for profile fields and one final call for growth_strategy. Do not set onboarding_complete; the app sets it after onboarding succeeds.
 
 === SAFETY AND ACCURACY ===
 - Never invent metrics. Use gathered data or say the metric is unavailable.

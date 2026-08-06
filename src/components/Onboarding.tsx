@@ -686,7 +686,7 @@ const toolIcons: Record<string, any> = {
   read_replies: CornerUpLeft, read_social_content: Database, read_memory: Database,
   save_hook: Lightbulb, save_voice_rule: ShieldCheck, save_pillar: Save,
   save_algorithm_rule: Gauge, save_target: Crosshair, save_reply: CornerUpLeft,
-  save_memory: Database, update_profile: SquarePen, reset_strategy_defaults: RotateCcw,
+  save_memory: Database, update_soxial_profile: SquarePen, reset_strategy_defaults: RotateCcw,
   delete_voice_rules: Trash2, delete_hooks: Trash2, delete_pillars: Trash2,
   delete_targets: Trash2, delete_algorithm_rules: Trash2, save_milestone: TrendingUp,
   generate_image: ImageIcon, schedule_post: CalendarClock, get_scheduled_posts: CalendarClock,
