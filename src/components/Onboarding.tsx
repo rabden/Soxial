@@ -15,6 +15,7 @@ import { AppLogo } from 'src/components/ui/app-logo'
 import { ErrorBoundary } from 'src/components/ui/error-boundary'
 import { TransientRetryStep } from 'src/components/ui/transient-retry-step'
 import { cn } from 'src/lib/utils'
+import { getToolLabel, getToolCallDescription } from 'src/lib/tool-labels'
 
 const EASE = 'cubic-bezier(0.16, 1, 0.3, 1)'
 
@@ -929,8 +930,8 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
 
   const renderStep = (step: StepItem, key: number, isStreaming = false) => {
     const description =
-      step.type === 'tool' && step.status === 'calling'
-        ? JSON.stringify(step.args)
+      step.type === 'tool'
+        ? getToolCallDescription(step.name, step.status, step.args)
         : undefined
 
     if (step.type === 'reasoning') {
@@ -947,7 +948,7 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
         <ChainOfThoughtStep
           key={key}
           icon={getToolIcon(step.name)}
-          label={step.name}
+          label={getToolLabel(step.name)}
           description={description}
           status={step.status === 'calling' ? 'active' : 'complete'}
         />

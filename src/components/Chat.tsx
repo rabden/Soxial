@@ -12,6 +12,7 @@ import {
 import { RichContent } from "src/components/rich-content";
 import { TransientRetryStep } from "src/components/ui/transient-retry-step";
 import { PromptInput } from "src/components/ui/prompt-input";
+import { getToolLabel, getToolCallDescription } from "src/lib/tool-labels";
 import { PostAttachments } from "src/components/ui/post-attachment";
 import {
   SearchIcon,
@@ -1383,7 +1384,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                                     <div key={si} className="space-y-2">
                                       <ChainOfThoughtStep
                                         icon={getToolIcon(step.name)}
-                                        label={step.name}
+                                        label={getToolLabel(step.name)}
                                         status="complete"
                                       />
                                       {step.status === "complete" &&
@@ -1452,11 +1453,13 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                                     <div key={si} className="space-y-2">
                                       <ChainOfThoughtStep
                                         icon={getToolIcon(step.name)}
-                                        label={step.name}
+                                        label={getToolLabel(step.name)}
                                         description={
-                                          step.status === "calling"
-                                            ? JSON.stringify(step.args)
-                                            : undefined
+                                          getToolCallDescription(
+                                            step.name,
+                                            step.status,
+                                            step.args,
+                                          )
                                         }
                                         status={
                                           step.status === "calling"
