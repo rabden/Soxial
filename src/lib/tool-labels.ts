@@ -45,7 +45,7 @@ const TOOL_LABELS: Record<string, string> = {
   reddit_subscribe: "Changing subreddit subscription",
 
   // App profile (NOT the user's X/Reddit profile)
-  update_profile: "Saving app profile",
+  update_soxial_profile: "Saving app profile",
   read_profile: "Reading app profile",
   reset_strategy_defaults: "Resetting strategy defaults",
 
@@ -88,7 +88,7 @@ export function getToolCallDescription(
   args: unknown,
 ): string | undefined {
   if (status !== "calling") return undefined;
-  if (name === "update_profile") return UPDATE_PROFILE_NOTE;
+  if (name === "update_soxial_profile") return UPDATE_PROFILE_NOTE;
   if (!args) return undefined;
   const str = JSON.stringify(args);
   return str.length > 120 ? `${str.slice(0, 117)}…` : str;
