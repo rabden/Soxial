@@ -20,7 +20,7 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "postinstall": "electron node_modules/electron/install.js && electron-builder install-app-deps",
+    "postinstall": "node node_modules/electron/install.js && electron-builder install-app-deps",
     "reset": "node reset.js"
   },
   "dependencies": {
