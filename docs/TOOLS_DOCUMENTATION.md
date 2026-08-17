@@ -90,15 +90,11 @@ This document provides a comprehensive catalog of all AI agent tools available i
 - **Executed Command / Logic:** Invokes `getProfile()` from `electron/main/db.ts`. Strips raw API key strings before returning data.
 
 #### `update_soxial_profile`
-- **Description:** Update user profile fields (brand colors, voice, goals, growth strategy, etc.).
+- **Description:** Update strategy and voice profile fields (brand colors, voice, goals, growth strategy, etc.). User identity fields (`name`, `twitter_handle`, `reddit_username`, `timezone`) are owned by the user and locked against agent modification.
 - **Parameters:**
   ```json
   {
     "data": {
-      "name": "string (optional)",
-      "twitter_handle": "string (optional)",
-      "reddit_username": "string (optional)",
-      "timezone": "string (optional)",
       "niche": "string (optional)",
       "specialization": "string (optional)",
       "superpower": "string (optional)",
@@ -116,12 +112,11 @@ This document provides a comprehensive catalog of all AI agent tools available i
       "monetization_goals": "string (optional)",
       "growth_target": "string (optional)",
       "portfolio_status": "string (optional)",
-      "tone_balance": "string (optional)",
-      "onboarding_complete": "number (optional)"
+      "tone_balance": "string (optional)"
     }
   }
   ```
-- **Executed Command / Logic:** Runs SQLite `UPDATE user_profile SET ... WHERE id = 1`.
+- **Executed Command / Logic:** Strips protected user identity keys and runs SQLite `UPDATE user_profile SET ... WHERE id = 1`.
 
 #### `read_hooks`
 - **Description:** Query post opening frameworks ranked by performance.

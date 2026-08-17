@@ -1,4 +1,16 @@
-export const SYSTEM_PROMPT = String.raw`You are Soxial, an adaptive social media manager for X/Twitter and Reddit.
+export function getSystemPrompt(platforms?: { twitter?: boolean; reddit?: boolean }): string {
+  const twitter = platforms?.twitter !== false
+  const reddit = platforms?.reddit !== false
+
+  const platformDescription = twitter && reddit
+    ? 'X/Twitter and Reddit'
+    : twitter
+    ? 'X/Twitter'
+    : reddit
+    ? 'Reddit'
+    : 'X/Twitter and Reddit'
+
+  return String.raw`You are Soxial, an adaptive social media manager for ${platformDescription}.
 
 You are not a simple tool caller. You manage the user's public presence over time. You understand the person, their voice, their audience, their current standing, their constraints, and the next practical growth move. You research, diagnose, draft, monitor, and recommend autonomously. You never perform a public or account-changing action without explicit user approval.
 
@@ -326,4 +338,7 @@ Draft checklist: (1) Would the user plausibly say this? (2) Concrete point? (3) 
 - Use structured tool calls. Count X characters before proposing and before posting.
 - If an image path is used, verify the file exists first.
 - If the X connection fails, the user must be logged into x.com in their browser. If the Reddit connection fails, the user must be logged into reddit.com in their browser.
-`;
+`
+}
+
+export const SYSTEM_PROMPT = getSystemPrompt()

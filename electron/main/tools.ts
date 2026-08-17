@@ -15,9 +15,23 @@ import {
   compactRedditForModel,
 } from './social-content'
 
-export function createTools(opts?: { defaultMax?: number }) {
+export function createTools(opts?: {
+  defaultMax?: number
+  platforms?: { twitter?: boolean; reddit?: boolean }
+}) {
   const defaultMax = opts?.defaultMax ?? MAX_SOCIAL_ITEMS
-  return {
+  const twitterEnabled = opts?.platforms?.twitter !== false
+  const redditEnabled = opts?.platforms?.reddit !== false
+
+  const platformEnum = twitterEnabled && redditEnabled
+    ? z.enum(['twitter', 'reddit'])
+    : twitterEnabled
+    ? z.enum(['twitter'])
+    : redditEnabled
+    ? z.enum(['reddit'])
+    : z.enum(['twitter', 'reddit'])
+
+  const sharedTools: Record<string, any> = {
 
     read_profile: {
       description: 'Read the user profile: identity, niche, goals, voice, brand colors, API keys, platform handles.',
@@ -31,13 +45,9 @@ export function createTools(opts?: { defaultMax?: number }) {
     },
 
     update_soxial_profile: {
-      description: 'Update the user profile with new data. Use for setting brand colors, voice, goals, growth strategy, etc.',
+      description: 'Update the user profile with strategy and voice data. Use for setting brand colors, voice, goals, growth strategy, etc. NOTE: User identity fields (name, handles, timezone) are owned by the user and cannot be changed here.',
       parameters: z.object({
         data: z.object({
-          name: z.string().optional(),
-          twitter_handle: z.string().optional(),
-          reddit_username: z.string().optional(),
-          timezone: z.string().optional(),
           niche: z.string().optional(),
           specialization: z.string().optional(),
           superpower: z.string().optional(),
@@ -56,11 +66,11 @@ export function createTools(opts?: { defaultMax?: number }) {
           growth_target: z.string().optional(),
           portfolio_status: z.string().optional(),
           tone_balance: z.string().optional(),
-          onboarding_complete: z.number().optional(),
-        }).describe('Profile fields to update')
+        }).describe('Strategy and voice profile fields to update')
       }),
       execute: async ({ data }) => {
-        updateProfile(data)
+        const { name, twitter_handle, reddit_username, timezone, onboarding_complete, ...allowed } = (data || {}) as any
+        updateProfile(allowed)
         return { success: true, message: 'Profile updated' }
       }
     },
@@ -500,7 +510,7 @@ export function createTools(opts?: { defaultMax?: number }) {
     schedule_post: {
       description: 'Schedule a post for later. Stores it in the queue with platform, text, and time.',
       parameters: z.object({
-        platform: z.enum(['twitter', 'reddit']),
+        platform: platformEnum,
         type: z.string().describe('Post type from content pillars'),
         text: z.string().describe('Full post text'),
         media_path: z.string().optional(),
@@ -525,6 +535,102 @@ export function createTools(opts?: { defaultMax?: number }) {
       }
     },
 
+    read_image_guide: {
+      description: 'Read the complete image generation guide — platform specs, 5-part prompting framework, brand style integration, examples, common mistakes, and quality checklist. Call this BEFORE generate_image to get full context for crafting the best prompt.',
+      parameters: z.object({}),
+      execute: async () => {
+        const { readFileSync } = await import('fs')
+        const { join } = await import('path')
+        const guidePath = join(__dirname, '../../references/image-generation.md')
+        const content = readFileSync(guidePath, 'utf-8')
+        return { guide: content }
+      }
+    },
+
+    inspect_image_url: {
+      description: 'Fetch an image from a direct URL, convert it to base64, and return it as a file part so the model can visually inspect the image content. Use this before replying to posts where the text depends on an attached image.',
+      parameters: z.object({
+        url: z.string().url().describe('Direct image URL to inspect'),
+      }),
+      execute: async ({ url }) => {
+        const parsed = new URL(url)
+        if (!/^https?:$/.test(parsed.protocol)) {
+          return { error: 'Only http(s) image URLs are supported.' }
+        }
+
+        const needsXReferer =
+          parsed.hostname.includes('twitter') ||
+          parsed.hostname.includes('x.com') ||
+          parsed.hostname.includes('twimg')
+        const headers: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        }
+        if (needsXReferer) {
+          headers.Referer = 'https://x.com/'
+          headers.Origin = 'https://x.com'
+        }
+
+        const response = await fetch(url, { headers })
+
+        if (!response.ok) {
+          return { error: `Failed to fetch image (${response.status} ${response.statusText})`, sourceUrl: url }
+        }
+
+        const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || ''
+        if (!mimeType.startsWith('image/')) {
+          return { error: `URL did not return an image content-type (${mimeType || 'unknown'})`, sourceUrl: url }
+        }
+
+        const maxBytes = 12 * 1024 * 1024
+        const buffer = Buffer.from(await response.arrayBuffer())
+        if (buffer.byteLength > maxBytes) {
+          return { error: `Image is too large to inspect (${buffer.byteLength} bytes > ${maxBytes} bytes)`, sourceUrl: url, mimeType }
+        }
+
+        return {
+          sourceUrl: url,
+          mimeType,
+          byteLength: buffer.byteLength,
+          data: buffer.toString('base64'),
+        }
+      },
+      toModelOutput: async ({ output }: { output: any }) => {
+        if (!output || output.error || !output.data) {
+          return { type: 'content' as const, value: [{ type: 'text' as const, text: JSON.stringify(output) }] }
+        }
+        return {
+          type: 'content' as const,
+          value: [
+            { type: 'text' as const, text: `Image from ${output.sourceUrl} (${output.mimeType}, ${output.byteLength} bytes):` },
+            { type: 'file' as const, mediaType: output.mimeType, data: { type: 'data' as const, data: output.data } },
+          ],
+        }
+      },
+    },
+
+    generate_image: {
+      description: 'Generate an image with Google AI Studio Gemini image generation by default, falling back to Puter.js if Gemini fails. Call read_image_guide first for the full prompting guide, then call read_profile for brand colors before building prompt. Use the 5-part prompting framework.',
+      parameters: z.object({
+        prompt: z.string().describe('Full image prompt. Include text for quotes, labels, headlines, hook cards, or branding when needed. Specify font style, color, size, and placement. End with constraints: "No watermarks, no logos, no AI artifacts."'),
+        filename: z.string().describe('Output filename with .png extension, e.g. twitter_hook_2026-06-23.png'),
+        model: z.enum(['gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-2']).optional().describe('Fallback Puter.js image model if Gemini image generation fails.')
+      }),
+      execute: async ({ prompt, filename }) => {
+        let safeFilename = filename && filename.trim() ? filename.trim() : `generated_${Date.now()}.png`
+        if (!safeFilename.endsWith('.png')) safeFilename += '.png'
+        try {
+          const { generateImage } = await import('./puter')
+          const path = await generateImage(prompt, safeFilename)
+          return { success: true, path, filename: safeFilename, message: `Image saved to ${path}` }
+        } catch (e: any) {
+          return { error: e.message }
+        }
+      }
+    }
+  }
+
+  const twitterTools: Record<string, any> = {
     twitter_status: {
       description: 'Check Twitter/X authentication status. Verifies your X session.',
       parameters: z.object({}),
@@ -842,8 +948,10 @@ export function createTools(opts?: { defaultMax?: number }) {
         const cmd = action === 'unfollow' ? 'unfollow' : 'follow'
         return runCli('twitter', [cmd, handle, '--json'])
       }
-    },
+    }
+  }
 
+  const redditTools: Record<string, any> = {
     reddit_search: {
       description: 'Search Reddit for posts. Use subreddit parameter to browse specific subreddits (e.g., subreddit: "frontend"). Query can be empty when using subreddit parameter to browse all posts in that subreddit.',
       parameters: z.object({
@@ -1077,100 +1185,12 @@ export function createTools(opts?: { defaultMax?: number }) {
         username: z.string()
       }),
       execute: async ({ username }) => runCli('rdt', ['user', username, '--json'])
-    },
-
-    read_image_guide: {
-      description: 'Read the complete image generation guide — platform specs, 5-part prompting framework, brand style integration, examples, common mistakes, and quality checklist. Call this BEFORE generate_image to get full context for crafting the best prompt.',
-      parameters: z.object({}),
-      execute: async () => {
-        const { readFileSync } = await import('fs')
-        const { join } = await import('path')
-        const guidePath = join(__dirname, '../../references/image-generation.md')
-        const content = readFileSync(guidePath, 'utf-8')
-        return { guide: content }
-      }
-    },
-
-    inspect_image_url: {
-      description: 'Fetch an image from a direct URL, convert it to base64, and return it as a file part so the model can visually inspect the image content. Use this before replying to posts where the text depends on an attached image.',
-      parameters: z.object({
-        url: z.string().url().describe('Direct image URL to inspect'),
-      }),
-      execute: async ({ url }) => {
-        const parsed = new URL(url)
-        if (!/^https?:$/.test(parsed.protocol)) {
-          return { error: 'Only http(s) image URLs are supported.' }
-        }
-
-        const needsXReferer =
-          parsed.hostname.includes('twitter') ||
-          parsed.hostname.includes('x.com') ||
-          parsed.hostname.includes('twimg')
-        const headers: Record<string, string> = {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        }
-        if (needsXReferer) {
-          headers.Referer = 'https://x.com/'
-          headers.Origin = 'https://x.com'
-        }
-
-        const response = await fetch(url, { headers })
-
-        if (!response.ok) {
-          return { error: `Failed to fetch image (${response.status} ${response.statusText})`, sourceUrl: url }
-        }
-
-        const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || ''
-        if (!mimeType.startsWith('image/')) {
-          return { error: `URL did not return an image content-type (${mimeType || 'unknown'})`, sourceUrl: url }
-        }
-
-        const maxBytes = 12 * 1024 * 1024
-        const buffer = Buffer.from(await response.arrayBuffer())
-        if (buffer.byteLength > maxBytes) {
-          return { error: `Image is too large to inspect (${buffer.byteLength} bytes > ${maxBytes} bytes)`, sourceUrl: url, mimeType }
-        }
-
-        return {
-          sourceUrl: url,
-          mimeType,
-          byteLength: buffer.byteLength,
-          data: buffer.toString('base64'),
-        }
-      },
-      toModelOutput: async ({ output }: { output: any }) => {
-        if (!output || output.error || !output.data) {
-          return { type: 'content' as const, value: [{ type: 'text' as const, text: JSON.stringify(output) }] }
-        }
-        return {
-          type: 'content' as const,
-          value: [
-            { type: 'text' as const, text: `Image from ${output.sourceUrl} (${output.mimeType}, ${output.byteLength} bytes):` },
-            { type: 'file' as const, mediaType: output.mimeType, data: { type: 'data' as const, data: output.data } },
-          ],
-        }
-      },
-    },
-
-    generate_image: {
-      description: 'Generate an image with Google AI Studio Gemini image generation by default, falling back to Puter.js if Gemini fails. Call read_image_guide first for the full prompting guide, then call read_profile for brand colors before building prompt. Use the 5-part prompting framework.',
-      parameters: z.object({
-        prompt: z.string().describe('Full image prompt. Include text for quotes, labels, headlines, hook cards, or branding when needed. Specify font style, color, size, and placement. End with constraints: "No watermarks, no logos, no AI artifacts."'),
-        filename: z.string().describe('Output filename with .png extension, e.g. twitter_hook_2026-06-23.png'),
-        model: z.enum(['gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-2']).optional().describe('Fallback Puter.js image model if Gemini image generation fails.')
-      }),
-      execute: async ({ prompt, filename }) => {
-        let safeFilename = filename && filename.trim() ? filename.trim() : `generated_${Date.now()}.png`
-        if (!safeFilename.endsWith('.png')) safeFilename += '.png'
-        try {
-          const { generateImage } = await import('./puter')
-          const path = await generateImage(prompt, safeFilename)
-          return { success: true, path, filename: safeFilename, message: `Image saved to ${path}` }
-        } catch (e: any) {
-          return { error: e.message }
-        }
-      }
     }
+  }
+
+  return {
+    ...sharedTools,
+    ...(twitterEnabled ? twitterTools : {}),
+    ...(redditEnabled ? redditTools : {})
   }
 }

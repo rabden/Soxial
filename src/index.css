@@ -189,3 +189,23 @@ button { cursor: pointer; font-family: inherit; }
 .btn-capsule:active {
     transform: scale(0.97);
 }
+
+/* ---- Pixel Grid Loader & Shimmer ---- */
+@keyframes pixel-on {
+    0%, 100% {
+        opacity: 0.15;
+    }
+    50% {
+        opacity: 0.95;
+    }
+}
+
+@keyframes shimmer-text {
+    0% {
+        background-position: 100% 0;
+    }
+    100% {
+        background-position: -100% 0;
+    }
+}
+

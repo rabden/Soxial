@@ -34,8 +34,8 @@ const api = {
     ipcRenderer.on('onboarding:question', (_e, payload) => cb(payload)),
   sendOnboardingAnswer: (id: string, answers: { id: string; answer: string | string[] }[]) => ipcRenderer.send('onboarding:answer', { id, answers }),
   saveOnboardingConversation: (messages: { role: string; content: string; steps?: any[] }[]) => ipcRenderer.invoke('onboarding:saveConversation', messages),
-  retryOnboardingAuth: (id: string, retry: boolean) => ipcRenderer.send('onboarding:retryAuth', { id, retry }),
-  onOnboardingAuthRequired: (cb: (payload: { id: string; twitter: { needed: boolean; ok: boolean }; reddit: { needed: boolean; ok: boolean } }) => void) =>
+  retryOnboardingAuth: (id: string, action: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort' | boolean) => ipcRenderer.send('onboarding:retryAuth', { id, action }),
+  onOnboardingAuthRequired: (cb: (payload: { id: string; twitter: { needed: boolean; ok: boolean; username?: string; name?: string }; reddit: { needed: boolean; ok: boolean; username?: string; name?: string }; canSkipTwitter?: boolean; canSkipReddit?: boolean; canProceedPartial?: boolean }) => void) =>
     ipcRenderer.on('onboarding:authRequired', (_e, payload) => cb(payload)),
 
   chatSend: (messages: any[], options?: { model?: string; effort?: string }, sessionId?: number) => ipcRenderer.invoke('chat:send', messages, options, sessionId),

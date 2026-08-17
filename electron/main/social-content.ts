@@ -504,5 +504,18 @@ export async function gatherOnboardingSocialData(
     gathered.reddit_feed = feedResult
   }
 
+  // Extract platform display names
+  let twitterName: string | null = null
+  if (gathered.twitter_user?.data || gathered.twitter_whoami?.data) {
+    const tUser = gathered.twitter_user?.data?.data || gathered.twitter_user?.data || gathered.twitter_whoami?.data?.data || gathered.twitter_whoami?.data || {}
+    twitterName = (tUser.user?.name || tUser.name || null)
+  }
+  let redditDisplayName: string | null = null
+  if (gathered.reddit_whoami?.data) {
+    const rData = gathered.reddit_whoami.data?.data || gathered.reddit_whoami.data || {}
+    redditDisplayName = (rData.subreddit?.title || rData.name || null)
+  }
+  gathered._platform_names = { twitter_name: twitterName, reddit_display_name: redditDisplayName }
+
   return gathered
 }

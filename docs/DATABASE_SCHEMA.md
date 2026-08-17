@@ -155,9 +155,11 @@ Stores core user identity, branding strategies, voice configurations, and API ke
 | Column | Data Type | Constraints | Default | Description |
 |---|---|---|---|---|
 | `id` | `INTEGER` | `PRIMARY KEY, CHECK (id = 1)` | - | Single profile record identifier |
-| `name` | `TEXT` | - | `NULL` | User's display name |
+| `name` | `TEXT` | - | `NULL` | User's app profile name (from onboarding/identity) |
 | `twitter_handle` | `TEXT` | - | `NULL` | X / Twitter username (without `@`) |
+| `twitter_name` | `TEXT` | - | `NULL` | X / Twitter profile display name |
 | `reddit_username` | `TEXT` | - | `NULL` | Reddit username (without `u/`) |
+| `reddit_display_name` | `TEXT` | - | `NULL` | Reddit profile display name / title |
 | `timezone` | `TEXT` | - | `NULL` | Preferred timezone string (e.g. `UTC+1`) |
 | `has_premium` | `INTEGER` | - | `0` | Premium status flag (`0` or `1`) |
 | `niche` | `TEXT` | - | `NULL` | User's primary domain/niche |

@@ -24,8 +24,15 @@ interface Window {
     onOnboardingQuestion: (cb: (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) => void) => void
     sendOnboardingAnswer: (id: string, answers: { id: string; answer: string | string[] }[]) => void
     saveOnboardingConversation: (messages: { role: string; content: string; steps?: any[] }[]) => Promise<number>
-    retryOnboardingAuth: (id: string, retry: boolean) => void
-    onOnboardingAuthRequired: (cb: (payload: { id: string; twitter: { needed: boolean; ok: boolean }; reddit: { needed: boolean; ok: boolean } }) => void) => void
+    retryOnboardingAuth: (id: string, action: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort' | boolean) => void
+    onOnboardingAuthRequired: (cb: (payload: {
+      id: string
+      twitter: { needed: boolean; ok: boolean; username?: string; name?: string }
+      reddit: { needed: boolean; ok: boolean; username?: string; name?: string }
+      canSkipTwitter?: boolean
+      canSkipReddit?: boolean
+      canProceedPartial?: boolean
+    }) => void) => void
     chatSend: (messages: any[], options?: { model?: string; effort?: string }, sessionId?: number) => Promise<any>
     chatInject: (payload: any, sessionId?: number) => Promise<any>
     chatStop: (sessionId?: number) => Promise<any>

@@ -28,7 +28,9 @@ function initSchema(db: Database.Database) {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       name TEXT,
       twitter_handle TEXT,
+      twitter_name TEXT,
       reddit_username TEXT,
+      reddit_display_name TEXT,
       timezone TEXT,
       has_premium INTEGER DEFAULT 0,
       niche TEXT,
@@ -248,7 +250,7 @@ function initSchema(db: Database.Database) {
     db.exec('ALTER TABLE user_profile ADD COLUMN growth_strategy TEXT')
   }
 
-  const MISSING_COLS = ['tools_stack', 'monetization_goals', 'growth_target', 'portfolio_status', 'tone_balance', 'branding_strategy']
+  const MISSING_COLS = ['tools_stack', 'monetization_goals', 'growth_target', 'portfolio_status', 'tone_balance', 'branding_strategy', 'twitter_name', 'reddit_display_name']
   for (const col of MISSING_COLS) {
     if (!profileCols.some((c: any) => c.name === col)) {
       db.exec(`ALTER TABLE user_profile ADD COLUMN ${col} TEXT`)
@@ -548,6 +550,7 @@ export interface SocialContentRow {
 
 export interface TwitterHandleRebuildCutover {
   twitterHandle: string
+  twitterName?: string | null
   profile: {
     niche: string
     specialization: string
@@ -584,6 +587,7 @@ export function applyTwitterHandleRebuild(
 
     db.prepare(`UPDATE user_profile SET
       twitter_handle = @twitterHandle,
+      twitter_name = CASE WHEN @twitterName IS NOT NULL THEN @twitterName ELSE twitter_name END,
       niche = @niche,
       specialization = @specialization,
       voice_description = @voice_description,
@@ -592,6 +596,7 @@ export function applyTwitterHandleRebuild(
       growth_strategy = @growth_strategy
       WHERE id = 1`).run({
         twitterHandle: payload.twitterHandle,
+        twitterName: payload.twitterName ?? null,
         ...payload.profile,
         avoid_words: payload.profile.avoid_words ?? null,
         branding_strategy: payload.profile.branding_strategy ?? null,

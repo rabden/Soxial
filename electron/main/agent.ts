@@ -6,8 +6,8 @@ import { logger } from './log'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import { SOCIAL_FETCH_TOOLS } from './social-content'
-import { SYSTEM_PROMPT } from './agent-system-prompt'
-export { ONBOARDING_SYSTEM_PROMPT } from './onboarding-system-prompt'
+import { SYSTEM_PROMPT, getSystemPrompt } from './agent-system-prompt'
+export { ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt } from './onboarding-system-prompt'
 
 const CHAT_MODEL = 'gemini-3.5-flash-lite'
 const TITLE_MODEL = 'gemma-4-31b-it'
@@ -175,7 +175,12 @@ export function getAgentConfig(options?: AgentOptions): AgentConfig {
   const effortLabel = options?.effort || 'Medium'
   const thinkingLevel = EFFORT_MAP[effortLabel] || 'medium'
 
-  let system = SYSTEM_PROMPT
+  const platforms = {
+    twitter: !!profile?.twitter_handle,
+    reddit: !!profile?.reddit_username,
+  }
+
+  let system = getSystemPrompt(platforms)
   const now = new Date()
   const userTz = profile?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   let localTimeStr: string
@@ -205,7 +210,7 @@ export function getAgentConfig(options?: AgentOptions): AgentConfig {
     modelId,
     thinkingLevel,
     system,
-    tools: createTools({ defaultMax: 10 }),
+    tools: createTools({ defaultMax: 10, platforms }),
     profile,
     tier
   }
@@ -254,8 +259,9 @@ export function createOnboardingTools(
       options?: string[]
     }[]
   }) => void,
+  platforms?: { twitter?: boolean; reddit?: boolean },
 ) {
-  const base = createTools()
+  const base = createTools({ platforms })
   return {
     ...base,
     ask_user_questions: {
@@ -432,8 +438,9 @@ export function createChatTools(
     type: 'single' | 'multi' | 'text'
     options?: string[]
   }) => void,
+  platforms?: { twitter?: boolean; reddit?: boolean },
 ) {
-  const base = createTools({ defaultMax: 10 })
+  const base = createTools({ defaultMax: 10, platforms })
   return {
     ...base,
     ask_user: {

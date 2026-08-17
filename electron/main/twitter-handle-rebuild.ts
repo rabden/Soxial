@@ -334,8 +334,10 @@ export async function startTwitterHandleRebuild(
     validateState(state)
 
     progress({ phase: 'cutover', message: 'Applying rebuilt profile' })
+    const twitterName = (evidence.twitter_user as any)?.data?.name || (evidence.twitter_whoami as any)?.data?.name || null
     const cutover: TwitterHandleRebuildCutover = {
       twitterHandle: handle,
+      twitterName,
       profile: state.profile,
       hooks: state.hooks,
       pillars: state.pillars,

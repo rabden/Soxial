@@ -49,6 +49,10 @@ const TOOL_LABELS: Record<string, string> = {
   read_profile: "Reading app profile",
   reset_strategy_defaults: "Resetting strategy defaults",
 
+  // Platform connector setup
+  connect_twitter: "Connecting X / Twitter",
+  connect_reddit: "Connecting Reddit",
+
   // Strategy / memory
   read_hooks: "Reading hook library",
   save_hook: "Saving hooks",
@@ -88,8 +92,13 @@ export function getToolCallDescription(
   args: unknown,
 ): string | undefined {
   if (status !== "calling") return undefined;
+  if (name === "connect_twitter") return "Installing twitter-cli & detecting browser session...";
+  if (name === "connect_reddit") return "Installing rdt-cli & detecting browser session...";
+  if (name === "twitter_status" || name === "twitter_whoami") return "Verifying X account cookies...";
+  if (name === "reddit_login" || name === "reddit_whoami") return "Verifying Reddit account cookies...";
   if (name === "update_soxial_profile") return UPDATE_PROFILE_NOTE;
   if (!args) return undefined;
+  if (typeof args === "object" && Object.keys(args as object).length === 0) return undefined;
   const str = JSON.stringify(args);
   return str.length > 120 ? `${str.slice(0, 117)}…` : str;
 }

@@ -6,7 +6,7 @@ config()
 import { getDb, getProfile, updateProfile, queryAll, insertRow, deleteRow, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, updateChatSessionContextSummary, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getApiTier, setApiTier, getAvailableModels, getDefaultModel, getApiKeys, addApiKey, removeApiKey, getModelExhaustionStatus, getSelectedModel, setSelectedModel } from './db'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, checkCli, checkCliAuth, runCli } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
-import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, createChatTools, installChatAnswerListener, clearPendingChatQuestions, ONBOARDING_MODEL_FALLBACK, CHAT_MODEL_FALLBACK_PRO, CHAT_MODEL_FALLBACK_FREE, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
+import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, createChatTools, installChatAnswerListener, clearPendingChatQuestions, ONBOARDING_MODEL_FALLBACK, CHAT_MODEL_FALLBACK_PRO, CHAT_MODEL_FALLBACK_FREE, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
 import { isTwitterHandleRebuildActive, previewTwitterHandleRebuild, startTwitterHandleRebuild } from './twitter-handle-rebuild'
 import { detectApiTier } from './api-tier'
 import { logger } from './log'
@@ -38,6 +38,19 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
+
+// ─── Single instance lock ───────────────────────────────────────────────────
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
 
 function getIconPath() {
   const candidates = [
@@ -181,17 +194,18 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-  // Onboarding auth gate: blocks gather until X/Reddit cookies are present.
-const pendingAuthRetries = new Map<string, (retry: boolean) => void>()
+// Onboarding auth gate: blocks gather until X/Reddit cookies are present.
+const pendingAuthRetries = new Map<string, (action: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort') => void>()
 let authRetryListenerInstalled = false
 function installAuthRetryListener() {
   if (authRetryListenerInstalled) return
   authRetryListenerInstalled = true
-  ipcMain.on('onboarding:retryAuth', (_e, { id, retry }: { id: string; retry: boolean }) => {
+  ipcMain.on('onboarding:retryAuth', (_e, { id, action, retry }: { id: string; action?: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort'; retry?: boolean }) => {
     const resolve = pendingAuthRetries.get(id)
     if (resolve) {
       pendingAuthRetries.delete(id)
-      resolve(retry)
+      const act = action || (retry ? 'retry' : 'abort')
+      resolve(act)
     }
   })
 }
@@ -305,14 +319,27 @@ function setupIpc() {
         await new Promise(resolve => setTimeout(resolve, 10))
         sendChunk('PHASE:gather')
 
-        // Auth gate helper: block until each platform the user entered is authenticated.
-        const wantTwitter = !!profile?.twitter_handle
-        const wantReddit = !!profile?.reddit_username
-        const waitForPlatformAuth = async (): Promise<{ aborted: boolean; twitter?: any; reddit?: any }> => {
+        let skipTwitter = false
+        let skipReddit = false
+
+        const waitForPlatformAuth = async (): Promise<{
+          aborted: boolean
+          twitter?: any
+          reddit?: any
+          twitterHandle?: string | null
+          twitterName?: string | null
+          redditUsername?: string | null
+          redditDisplayName?: string | null
+        }> => {
           while (true) {
-            let twitterRes: any
-            let redditRes: any
-            if (wantTwitter) {
+            let twitterRes: any = null
+            let redditRes: any = null
+            let twitterHandle: string | null = null
+            let twitterName: string | null = null
+            let redditUsername: string | null = null
+            let redditDisplayName: string | null = null
+
+            if (!skipTwitter) {
               sendToolCall('twitter_status', {})
               try {
                 twitterRes = await ensureTwitterAuth()
@@ -321,8 +348,14 @@ function setupIpc() {
                 logger.error('main', 'ensureTwitterAuth threw', e)
               }
               sendToolResult('twitter_status', twitterRes)
+              if (twitterRes?.ok && twitterRes?.data?.user) {
+                const u = twitterRes.data.user
+                twitterHandle = u.username || u.screenName || null
+                twitterName = u.name || null
+              }
             }
-            if (wantReddit) {
+
+            if (!skipReddit) {
               sendToolCall('reddit_login', {})
               try {
                 redditRes = await ensureRdtAuth()
@@ -331,21 +364,59 @@ function setupIpc() {
                 logger.error('main', 'ensureRdtAuth threw', e)
               }
               sendToolResult('reddit_login', redditRes)
+              if (redditRes?.ok && redditRes?.data?.username) {
+                redditUsername = redditRes.data.username
+              }
             }
-            const twitterOk = !wantTwitter || twitterRes?.ok
-            const redditOk = !wantReddit || redditRes?.ok
-            if (twitterOk && redditOk) {
-              return { aborted: false, twitter: twitterRes, reddit: redditRes }
+
+            const twitterOk = skipTwitter || (twitterRes?.ok && !!twitterHandle)
+            const redditOk = skipReddit || (redditRes?.ok && !!redditUsername)
+
+            if (twitterOk && redditOk && (!skipTwitter || !skipReddit)) {
+              return {
+                aborted: false,
+                twitter: skipTwitter ? undefined : twitterRes,
+                reddit: skipReddit ? undefined : redditRes,
+                twitterHandle,
+                twitterName,
+                redditUsername,
+                redditDisplayName,
+              }
             }
-            // Block: ask the user to log in, wait for their "Logged in" / "Back" signal.
+
             const id = `auth_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+            const canSkipTwitter = !skipTwitter && redditOk && !!redditUsername
+            const canSkipReddit = !skipReddit && twitterOk && !!twitterHandle
+            const canProceedPartial = canSkipTwitter || canSkipReddit
+
             mainWindow?.webContents.send('onboarding:authRequired', {
               id,
-              twitter: { needed: wantTwitter, ok: twitterOk },
-              reddit: { needed: wantReddit, ok: redditOk },
+              twitter: {
+                needed: !skipTwitter,
+                ok: twitterOk,
+                username: twitterHandle,
+                name: twitterName,
+              },
+              reddit: {
+                needed: !skipReddit,
+                ok: redditOk,
+                username: redditUsername,
+              },
+              canSkipTwitter,
+              canSkipReddit,
+              canProceedPartial,
             })
-            const retry = await new Promise<boolean>((resolve) => pendingAuthRetries.set(id, resolve))
-            if (!retry) return { aborted: true }
+
+            const action = await new Promise<'retry' | 'skip_twitter' | 'skip_reddit' | 'abort'>((resolve) =>
+              pendingAuthRetries.set(id, resolve)
+            )
+
+            if (action === 'abort') return { aborted: true }
+            if (action === 'skip_twitter') {
+              skipTwitter = true
+            } else if (action === 'skip_reddit') {
+              skipReddit = true
+            }
           }
         }
 
@@ -362,24 +433,42 @@ function setupIpc() {
           sendToolResult('connect_reddit', { ok: false, error: 'Reddit connector setup failed' })
         }
 
-        // Auth gate — per-platform: only require the platforms the user entered.
+        // Auth gate — per-platform: allow single-platform when user chooses to skip.
         const auth = await waitForPlatformAuth()
         if (auth.aborted) {
           logger.info('main', 'onboarding auth gate aborted by user')
           return { success: false, aborted: true }
         }
 
-        const profileSafe = (({ zai_api_key, gemini_api_key, openai_api_key, puter_token, ...rest }) => rest)(profile || {})
+        // Persist auto-discovered handles and display names into user_profile
+        const discoveredIdentity: Record<string, any> = {
+          twitter_handle: auth.twitterHandle || null,
+          twitter_name: auth.twitterName || null,
+          reddit_username: auth.redditUsername || null,
+          reddit_display_name: auth.redditDisplayName || null,
+        }
+        updateProfile(discoveredIdentity)
+        const updatedProfile = getProfile() || profile || {}
+
+        const profileSafe = (({ zai_api_key, gemini_api_key, openai_api_key, puter_token, ...rest }) => rest)(updatedProfile)
         const gathered: Record<string, any> = { profile: profileSafe }
 
         if (auth.reddit) gathered.reddit_login = auth.reddit
         if (auth.twitter) gathered.twitter_status = auth.twitter
 
-        const socialData = await gatherOnboardingSocialData(profile || {}, {
+        const socialData = await gatherOnboardingSocialData(updatedProfile, {
           onToolCall: sendToolCall,
           onToolResult: sendToolResult,
         })
         Object.assign(gathered, socialData)
+
+        // Persist discovered platform display names (separated from user profile name)
+        const platformNames: Record<string, any> = {}
+        if (socialData._platform_names?.twitter_name && !auth.twitterName) platformNames.twitter_name = socialData._platform_names.twitter_name
+        if (socialData._platform_names?.reddit_display_name && !auth.redditDisplayName) platformNames.reddit_display_name = socialData._platform_names.reddit_display_name
+        if (Object.keys(platformNames).length > 0) {
+          updateProfile(platformNames)
+        }
 
         const db = getDb()
         gathered.algorithm_rules = db.prepare('SELECT * FROM algorithm_rules').all()
@@ -390,14 +479,26 @@ function setupIpc() {
         // ─── Phase 2: Interactive AI onboarding ──────────────────────────────────
         sendChunk('PHASE:interview')
 
+        const currentProf = getProfile()
+        const platforms = {
+          twitter: !!currentProf?.twitter_handle,
+          reddit: !!currentProf?.reddit_username,
+        }
+
         const compacted = compactGatheredData(gathered)
         const snippets: string[] = ['=== AUTO-GATHERED DATA ===\nAnalyze this data, then ask ALL your interview questions in a single ask_user_questions tool call.\n']
         for (const [key, val] of Object.entries(compacted)) {
           snippets.push(`--- ${key} ---\n${JSON.stringify(val, null, 2)}`)
         }
-        snippets.push(`\nIMPORTANT: The user already told you their name is "${profile?.name || 'unknown'}", X handle is "${profile?.twitter_handle || 'not set'}", Reddit is "u/${profile?.reddit_username || 'not set'}". DO NOT re-ask these. Call ask_user_questions ONCE with all questions you genuinely need, then build their full strategy profile using bulk save tools.`)
+        const nameInfo = [
+          `User's actual name: "${currentProf?.name || profile?.name || 'unknown'}"`,
+          currentProf?.twitter_handle ? `X account: @${currentProf.twitter_handle}${currentProf.twitter_name ? ` (X display name: "${currentProf.twitter_name}")` : ''}` : 'X account: not connected',
+          currentProf?.reddit_username ? `Reddit account: u/${currentProf.reddit_username}${currentProf.reddit_display_name ? ` (Reddit display name: "${currentProf.reddit_display_name}")` : ''}` : 'Reddit account: not connected',
+        ].join(', ')
+        snippets.push(`\nIMPORTANT: User identity fields are strictly user-owned: ${nameInfo}. DO NOT re-ask these, and NEVER attempt to overwrite or alter the user's name or handles. Call ask_user_questions ONCE with all questions you genuinely need, then build their full strategy profile using bulk save tools.`)
 
-        const onboardingTools = createOnboardingTools(sendQuestions)
+        const onboardingTools = createOnboardingTools(sendQuestions, platforms)
+        const onboardingPrompt = getOnboardingSystemPrompt(platforms)
         const messages: { role: string; content: string | null; tool_call_id?: string; tool_calls?: any[] }[] = [
           { role: 'user', content: snippets.join('\n\n') }
         ]
@@ -416,7 +517,7 @@ function setupIpc() {
             (info) => mainWindow?.webContents.send('onboarding:transientRetry', info),
             { maxSteps: 60, fallbackChain: getOnboardingFallbackChain() },
             onboardingTools,
-            ONBOARDING_SYSTEM_PROMPT
+            onboardingPrompt
           )
         })
 
@@ -431,7 +532,15 @@ function setupIpc() {
           logger.warn('main', 'onboarding produced empty output — returning retryable error')
           return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
         }
-        updateProfile({ onboarding_complete: 1 })
+        
+        // Re-assert original user-entered identity fields to guarantee zero corruption
+        const safeUserIdentity: Record<string, any> = { onboarding_complete: 1 }
+        if (profileData.name) safeUserIdentity.name = profileData.name
+        if (profileData.timezone) safeUserIdentity.timezone = profileData.timezone
+        if (currentProf?.twitter_handle) safeUserIdentity.twitter_handle = currentProf.twitter_handle
+        if (currentProf?.reddit_username) safeUserIdentity.reddit_username = currentProf.reddit_username
+        updateProfile(safeUserIdentity)
+
         generateQuickActions().catch(() => {})
         return { success: true, summary: result.text }
       } else {
@@ -439,7 +548,13 @@ function setupIpc() {
         logger.info('main', `continuing onboarding from ${continueFromMessages.length} messages`)
         sendChunk('PHASE:interview')
 
-        const onboardingTools = createOnboardingTools(sendQuestions)
+        const currentProf = getProfile()
+        const platforms = {
+          twitter: !!currentProf?.twitter_handle,
+          reddit: !!currentProf?.reddit_username,
+        }
+        const onboardingTools = createOnboardingTools(sendQuestions, platforms)
+        const onboardingPrompt = getOnboardingSystemPrompt(platforms)
 
         const result = await new Promise<{ text: string; error?: string }>((resolve) => {
           runAgent(
@@ -453,7 +568,7 @@ function setupIpc() {
             (info) => mainWindow?.webContents.send('onboarding:transientRetry', info),
             { maxSteps: 60, fallbackChain: getOnboardingFallbackChain() },
             onboardingTools,
-            ONBOARDING_SYSTEM_PROMPT
+            onboardingPrompt
           )
         })
 
@@ -467,7 +582,15 @@ function setupIpc() {
           logger.warn('main', 'onboarding continuation produced empty output — returning retryable error')
           return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
         }
-        updateProfile({ onboarding_complete: 1 })
+
+        // Re-assert original user-entered identity fields to guarantee zero corruption
+        const safeUserIdentity: Record<string, any> = { onboarding_complete: 1 }
+        if (profileData.name) safeUserIdentity.name = profileData.name
+        if (profileData.timezone) safeUserIdentity.timezone = profileData.timezone
+        if (currentProf?.twitter_handle) safeUserIdentity.twitter_handle = currentProf.twitter_handle
+        if (currentProf?.reddit_username) safeUserIdentity.reddit_username = currentProf.reddit_username
+        updateProfile(safeUserIdentity)
+
         generateQuickActions().catch(() => {})
         return { success: true, summary: result.text }
       }
@@ -553,7 +676,12 @@ function setupIpc() {
 
       const sendChatQuestion = (q: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }) =>
         mainWindow?.webContents.send('chat:question', { ...q, sessionId: sid })
-      const chatTools = createChatTools(sendChatQuestion)
+      const currentProfile = getProfile()
+      const platforms = {
+        twitter: !!currentProfile?.twitter_handle,
+        reddit: !!currentProfile?.reddit_username,
+      }
+      const chatTools = createChatTools(sendChatQuestion, platforms)
 
       // Determine fallback chain based on API tier
       const tier = getApiTier().tier

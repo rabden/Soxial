@@ -108,8 +108,6 @@ export default function Onboarding({ onComplete }: { onComplete: (sessionId?: nu
     primary_goal: '',
     voice_description: '',
     gemini_api_key: '',
-    twitter_handle: '',
-    reddit_username: '',
     target_audience: ''
   })
 
@@ -323,51 +321,62 @@ function StepPlatforms({ formData, update, onBack, onNext }: any) {
     <div className="space-y-10">
       <motion.div variants={childVariants}>
         <h1 className="text-3xl font-bold text-white tracking-tight leading-none">Connect your platforms</h1>
-        <p className="text-zinc-500 mt-2 text-sm font-semibold">Enter your handles. The AI will investigate these during onboarding.</p>
+        <p className="text-zinc-400 mt-2 text-sm font-medium leading-relaxed">
+          Soxial securely connects to your active social accounts using session cookies from your default browser — no paid API keys required.
+        </p>
       </motion.div>
 
-      {/* Sheet panel enclosing inputs */}
+      {/* Sheet panel enclosing platform discovery info */}
       <motion.div variants={childVariants} className="p-1.5 rounded-3xl bg-white/[0.02] border border-white/[0.04] shadow-[0_12px_40px_rgba(0,0,0,0.5)]">
         <div className="p-6 md:p-8 rounded-[calc(1.5rem+4px)] bg-[#0c0c10]/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] space-y-6">
-          {/* Twitter field */}
-          <div className="space-y-2">
-            <label className="block text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-bold block ml-1">X / Twitter handle</label>
-            <div className="relative flex items-center group">
-              <div className="pl-4 pr-1 py-3.5 flex items-center gap-1.5 absolute left-0 z-10">
-                <XLogo className="size-3.5 text-zinc-500 group-focus-within:text-blue-500/50 transition-colors" />
-                <span className="text-sm font-semibold text-zinc-700">@</span>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* X Card */}
+            <div className="p-5 rounded-2xl bg-white/[0.02] border border-white/[0.04] space-y-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center">
+                  <XLogo className="size-4 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white leading-tight">X / Twitter</h3>
+                  <span className="text-[11px] text-zinc-500 font-medium">Auto-detected from browser</span>
+                </div>
               </div>
-              <input
-                value={formData.twitter_handle || ''}
-                onChange={(e) => update('twitter_handle', e.target.value.replace('@', ''))}
-                placeholder="yourhandle"
-                className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-16 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
-              />
+              <p className="text-xs text-zinc-400 leading-relaxed font-normal">
+                Reads your timeline, searches trends, drafts tweets, and assists engagement.
+              </p>
+            </div>
+
+            {/* Reddit Card */}
+            <div className="p-5 rounded-2xl bg-white/[0.02] border border-white/[0.04] space-y-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-[#ff4500]/10 border border-[#ff4500]/20 flex items-center justify-center">
+                  <RedditLogo className="size-4 text-[#ff4500]" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white leading-tight">Reddit</h3>
+                  <span className="text-[11px] text-zinc-500 font-medium">Auto-detected from browser</span>
+                </div>
+              </div>
+              <p className="text-xs text-zinc-400 leading-relaxed font-normal">
+                Discovers niche subreddits, monitors discussions, and crafts helpful comments.
+              </p>
             </div>
           </div>
 
-          {/* Reddit field */}
-          <div className="space-y-2">
-            <label className="block text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-bold block ml-1">Reddit username</label>
-            <div className="relative flex items-center group">
-              <div className="pl-4 pr-1 py-3.5 flex items-center gap-1.5 absolute left-0 z-10">
-                <RedditLogo className="size-3.5 text-zinc-500 group-focus-within:text-blue-500/50 transition-colors" />
-                <span className="text-sm font-semibold text-zinc-700">u/</span>
-              </div>
-              <input
-                value={formData.reddit_username || ''}
-                onChange={(e) => update('reddit_username', e.target.value)}
-                placeholder="yourusername"
-                className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-16 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
-              />
-            </div>
-          </div>
+          <Input
+            label="Target audience"
+            value={formData.target_audience}
+            onChange={(v: string) => update('target_audience', v)}
+            placeholder="e.g., Startup founders, indie developers, AI engineers"
+            hint="Describe who you want to reach across your content strategy."
+          />
 
-          <Input label="Target audience" value={formData.target_audience} onChange={(v: string) => update('target_audience', v)} placeholder="e.g., Startup founders, indie developers" />
-
-          <div className="flex items-center gap-2 text-[11px] text-zinc-500 leading-relaxed ml-1 font-semibold">
-            <Check className="size-3.5 text-zinc-600 shrink-0 stroke-[2.5]" />
-            <span>Make sure you're logged into x.com and reddit.com in your browser.</span>
+          <div className="p-4 rounded-2xl bg-blue-500/5 border border-blue-500/10 flex items-start gap-3">
+            <Check className="size-4 text-blue-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-zinc-300 leading-relaxed font-medium">
+              Make sure you are logged into your preferred accounts in your browser (Chrome, Brave, Edge, Firefox, Arc, etc.). If you only want to use X or Reddit, you can proceed with a single platform.
+            </p>
           </div>
         </div>
       </motion.div>
@@ -380,7 +389,7 @@ function StepPlatforms({ formData, update, onBack, onNext }: any) {
         >
           Back
         </motion.button>
-        <PrimaryButton onClick={onNext} disabled={!formData.twitter_handle && !formData.reddit_username} className="flex-1 bg-white text-zinc-950 py-4 px-6 shadow-md justify-between">
+        <PrimaryButton onClick={onNext} className="flex-1 bg-white text-zinc-950 py-4 px-6 shadow-md justify-between">
           Start AI Onboarding
         </PrimaryButton>
       </motion.div>
@@ -669,7 +678,7 @@ interface ChatMessage {
 }
 
 const toolIcons: Record<string, any> = {
-  connect_twitter: Download, connect_reddit: Download,
+  connect_twitter: Sparkles, connect_reddit: Sparkles,
   twitter_search: SearchIcon, twitter_user: AtSign, twitter_user_posts: List,
   twitter_status: BadgeCheck, twitter_whoami: BadgeCheck,
   twitter_followers: Users, twitter_following: Users, twitter_likes: Heart,
@@ -706,7 +715,14 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
   const [error, setError] = useState<string | null>(null)
   const [complete, setComplete] = useState(false)
   const [savedConversationState, setSavedConversationState] = useState<any[] | null>(null)
-  const [pendingAuth, setPendingAuth] = useState<{ id: string; twitter: { needed: boolean; ok: boolean }; reddit: { needed: boolean; ok: boolean } } | null>(null)
+  const [pendingAuth, setPendingAuth] = useState<{
+    id: string
+    twitter: { needed: boolean; ok: boolean; username?: string; name?: string }
+    reddit: { needed: boolean; ok: boolean; username?: string; name?: string }
+    canSkipTwitter?: boolean
+    canSkipReddit?: boolean
+    canProceedPartial?: boolean
+  } | null>(null)
   const [transientRetry, setTransientRetry] = useState<{ attempt: number; maxAttempts: number; backoffMs: number; model: string } | null>(null)
   const mountedRef = useRef(true)
 
@@ -1058,41 +1074,80 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
       >
         <div ref={setInputEl} className="max-w-3xl mx-auto flex justify-center">
           {pendingAuth ? (
-            <div className="w-full max-w-md rounded-2xl px-5 py-4 pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-500 bg-[#0c0c10]/40 border border-white/[0.04] shadow-2xl backdrop-blur-xl">
+            <div className="w-full max-w-lg rounded-2xl px-6 py-5 pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-500 bg-[#0c0c10]/70 border border-white/[0.06] shadow-2xl backdrop-blur-xl">
               {(() => {
-                const need = [pendingAuth.twitter.needed && 'X', pendingAuth.reddit.needed && 'Reddit'].filter(Boolean) as string[]
-                const fail = [
-                  pendingAuth.twitter.needed && !pendingAuth.twitter.ok && 'X not connected',
-                  pendingAuth.reddit.needed && !pendingAuth.reddit.ok && 'Reddit not connected',
-                ].filter(Boolean) as string[]
+                const twitterOk = pendingAuth.twitter?.ok
+                const redditOk = pendingAuth.reddit?.ok
+
                 return (
                   <>
                     <div className="text-sm text-white/90 leading-relaxed font-semibold">
-                      Log into {need.join(' and ')} in your browser, then confirm below so Soxial can connect.
+                      {twitterOk && !redditOk ? (
+                        <span>Connected to X as <span className="text-blue-400">@{pendingAuth.twitter.username}</span>. Reddit session was not found in browser.</span>
+                      ) : !twitterOk && redditOk ? (
+                        <span>Connected to Reddit as <span className="text-orange-400">u/{pendingAuth.reddit.username}</span>. X session was not found in browser.</span>
+                      ) : (
+                        <span>No active browser sessions found. Please log into x.com and/or reddit.com in your default browser, then confirm below.</span>
+                      )}
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {fail.map((f) => (
-                        <span key={f} className="inline-flex items-center gap-1.5 text-[11px] text-amber-400 px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/10 font-semibold shadow-sm">
-                          <ShieldAlert className="size-3" /> {f}
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {twitterOk ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 font-semibold shadow-sm">
+                          <XLogo className="size-3" /> @{pendingAuth.twitter.username} connected
                         </span>
-                      ))}
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] text-amber-400 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 font-semibold shadow-sm">
+                          <ShieldAlert className="size-3" /> X not connected
+                        </span>
+                      )}
+
+                      {redditOk ? (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 font-semibold shadow-sm">
+                          <RedditLogo className="size-3 text-[#ff4500]" /> u/{pendingAuth.reddit.username} connected
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-[11px] text-amber-400 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 font-semibold shadow-sm">
+                          <ShieldAlert className="size-3" /> Reddit not connected
+                        </span>
+                      )}
                     </div>
-                    <div className="mt-5 flex items-center gap-3">
+
+                    <div className="mt-5 flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-white/[0.04]">
                       <button
-                        onClick={() => { window.api.retryOnboardingAuth(pendingAuth.id, false); setPendingAuth(null); onBack() }}
-                        className="px-5 py-2.5 rounded-full text-xs font-bold text-zinc-500 hover:text-white transition-colors"
+                        onClick={() => { window.api.retryOnboardingAuth(pendingAuth.id, 'abort'); setPendingAuth(null); onBack() }}
+                        className="px-4 py-2 rounded-full text-xs font-bold text-zinc-500 hover:text-white transition-colors"
                       >
                         Back
                       </button>
-                      <button
-                        onClick={() => { window.api.retryOnboardingAuth(pendingAuth.id, true); setPendingAuth(null) }}
-                        className="group flex items-center gap-2 px-5 py-2.5 rounded-full bg-white text-zinc-950 text-xs font-bold transition-transform active:scale-[0.96] hover:bg-zinc-100 shadow-lg"
-                      >
-                        Logged in
-                        <span className="w-5 h-5 rounded-full bg-zinc-900/15 flex items-center justify-center">
-                          <ArrowRight className="size-3 stroke-[2.5]" />
-                        </span>
-                      </button>
+
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        {pendingAuth.canSkipReddit && (
+                          <button
+                            onClick={() => { window.api.retryOnboardingAuth(pendingAuth.id, 'skip_reddit'); setPendingAuth(null) }}
+                            className="px-4 py-2 rounded-full text-xs font-bold text-zinc-300 bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] hover:text-white transition-colors"
+                          >
+                            Continue with X only
+                          </button>
+                        )}
+                        {pendingAuth.canSkipTwitter && (
+                          <button
+                            onClick={() => { window.api.retryOnboardingAuth(pendingAuth.id, 'skip_twitter'); setPendingAuth(null) }}
+                            className="px-4 py-2 rounded-full text-xs font-bold text-zinc-300 bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] hover:text-white transition-colors"
+                          >
+                            Continue with Reddit only
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { window.api.retryOnboardingAuth(pendingAuth.id, 'retry'); setPendingAuth(null) }}
+                          className="group flex items-center gap-2 px-5 py-2 rounded-full bg-white text-zinc-950 text-xs font-bold transition-transform active:scale-[0.96] hover:bg-zinc-100 shadow-lg"
+                        >
+                          Logged in
+                          <span className="w-5 h-5 rounded-full bg-zinc-900/15 flex items-center justify-center">
+                            <ArrowRight className="size-3 stroke-[2.5]" />
+                          </span>
+                        </button>
+                      </div>
                     </div>
                   </>
                 )

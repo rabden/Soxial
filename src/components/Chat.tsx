@@ -52,6 +52,7 @@ import {
   Users,
   Trash2,
   TrendingUp,
+  Sparkles,
 } from "lucide-react";
 import { AppLogo } from "src/components/ui/app-logo";
 import {
@@ -218,8 +219,8 @@ const toolIcons: Record<string, any> = {
   twitter_retweet: Repeat2,
   twitter_bookmark: Bookmark,
   twitter_follow: UserPlus,
-  connect_twitter: Download,
-  connect_reddit: Download,
+  connect_twitter: Sparkles,
+  connect_reddit: Sparkles,
   reddit_search: SearchIcon,
   reddit_sub: Layers,
   reddit_sub_info: Info,

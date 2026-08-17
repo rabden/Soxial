@@ -14,6 +14,22 @@ interface ProfileProps {
   onTwitterHandleRebuildRunningChange?: (running: boolean) => void;
 }
 
+function XLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  )
+}
+
+function RedditLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
+      <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 01-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 01.042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 014.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 01.14-.197.35.35 0 01.238-.042l2.906.617a1.214 1.214 0 011.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 00-.231.094.33.33 0 000 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.07 2.961-.913a.361.361 0 00.029-.463.33.33 0 00-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 00-.232-.095z" />
+    </svg>
+  )
+}
+
 function ipcErrorMessage(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback
   return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
@@ -189,7 +205,7 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
           <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight leading-none mb-4">
             {profile?.name || 'Anonymous User'}
           </h1>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs font-semibold tracking-wide text-zinc-500">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs font-semibold tracking-wide text-zinc-500">
             {profile?.niche && (
               <span className="text-zinc-300">{profile.niche}</span>
             )}
@@ -197,15 +213,19 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
               <span className="text-zinc-800">/</span>
             )}
             {profile?.twitter_handle && (
-              <span className="inline-flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <XLogo className="size-3 text-zinc-400" />
                 <a
                   href={`https://x.com/${profile.twitter_handle}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="hover:text-white transition-colors"
+                  className="text-zinc-300 hover:text-white transition-colors"
                 >
                   @{profile.twitter_handle}
                 </a>
+                {profile.twitter_name && (
+                  <span className="text-zinc-500 font-normal">({profile.twitter_name})</span>
+                )}
                 <button
                   onClick={() => {
                     setChangingHandle(true)
@@ -214,24 +234,27 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                     setRebuildResult(null)
                   }}
                   disabled={rebuilding}
-                  className="text-[10px] uppercase tracking-[0.16em] text-zinc-400 hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                  className="ml-1 text-[10px] uppercase tracking-[0.16em] text-zinc-400 hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none"
                 >
                   Change
                 </button>
               </span>
             )}
-            {profile?.twitter_handle && profile?.reddit_username && (
-              <span className="text-zinc-800">/</span>
-            )}
             {profile?.reddit_username && (
-              <a 
-                href={`https://reddit.com/user/${profile.reddit_username}`} 
-                target="_blank" 
-                rel="noreferrer"
-                className="hover:text-white transition-colors"
-              >
-                u/{profile.reddit_username}
-              </a>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <RedditLogo className="size-3 text-zinc-400" />
+                <a 
+                  href={`https://reddit.com/user/${profile.reddit_username}`} 
+                  target="_blank" 
+                  rel="noreferrer"
+                  className="text-zinc-300 hover:text-white transition-colors"
+                >
+                  u/{profile.reddit_username}
+                </a>
+                {profile.reddit_display_name && (
+                  <span className="text-zinc-500 font-normal">({profile.reddit_display_name})</span>
+                )}
+              </span>
             )}
           </div>
         </motion.header>
@@ -316,7 +339,7 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
 
               {rebuildResult && (
                 <div role="status" aria-live="polite" className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/15 text-sm text-emerald-100 leading-6">
-                  Rebuilt from @{rebuildResult.handle}. Archived {postCountCopy(rebuildResult.archivedCount)}.
+                  Rebuilt strategy from @{rebuildResult.handle}{profile?.twitter_name ? ` (${profile.twitter_name})` : ''}. Archived {postCountCopy(rebuildResult.archivedCount)}.
                 </div>
               )}
             </div>
