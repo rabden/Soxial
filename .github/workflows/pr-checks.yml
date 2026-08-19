@@ -50,4 +50,5 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run native:node
       - run: npm run test

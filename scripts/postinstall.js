@@ -8,9 +8,13 @@ const run = (cmd, args) => {
 
 run('node', ['node_modules/electron/install.js'])
 
-if (process.env.CI) {
-  console.log('CI detected: skipping electron-builder install-app-deps (native modules kept for Node ABI used by tests)')
-} else {
-  console.log('Rebuilding native dependencies for Electron ABI...')
+const target = process.env.SOXIAL_NATIVE_TARGET
+if (target === 'node') {
+  console.log('Preparing native dependencies for the Node test ABI...')
+  run('npm', ['rebuild', 'better-sqlite3', '--force'])
+} else if (target === 'electron' || !process.env.CI) {
+  console.log('Rebuilding native dependencies for the Electron ABI...')
   run('electron-builder', ['install-app-deps'])
+} else {
+  console.log('CI install complete; native ABI will be prepared by the explicit test/build step.')
 }
