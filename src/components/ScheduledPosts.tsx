@@ -38,7 +38,7 @@ export default function ScheduledPosts({ profile, onBack }: { profile: any; onBa
   const [deletingId, setDeletingId] = useState<number | null>(null)
 
   useEffect(() => {
-    window.api.dbQuery('scheduled_posts', 'status = ? OR status = ?', ['draft', 'scheduled']).then((data: any) => {
+    window.api.getScheduledPosts().then((data: any) => {
       setPosts(data || [])
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -53,7 +53,7 @@ export default function ScheduledPosts({ profile, onBack }: { profile: any; onBa
 
     setDeletingId(id)
     try {
-      await window.api.dbDelete('scheduled_posts', id)
+      await window.api.deleteScheduledPost(id)
       setPosts(prev => prev.filter(p => p.id !== id))
     } catch (err) {
       console.error('Failed to delete scheduled post:', err)

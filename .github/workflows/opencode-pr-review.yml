@@ -1,0 +1,39 @@
+name: opencode pr review
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  review:
+    if: |
+      github.repository == 'rabden/Soxial' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'opencode-agent[bot]' &&
+      github.event.pull_request.user.login != 'opencode-agent[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Run OpenCode review
+        uses: anomalyco/opencode/github@latest
+        with:
+          model: opencode/big-pickle
+          prompt: |
+            Review this pull request:
+            - Check for correctness and potential bugs.
+            - Check error handling, security, and data loss risks.
+            - Check tests and maintainability.
+            - Report only actionable findings, with file and line references where possible.

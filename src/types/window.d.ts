@@ -3,9 +3,12 @@ interface Window {
     platform: string
     getProfile: () => Promise<any>
     updateProfile: (data: Record<string, any>) => Promise<any>
-    dbQuery: (table: string, where?: string, params?: any[]) => Promise<any>
-    dbInsert: (table: string, data: Record<string, any>) => Promise<any>
-    dbDelete: (table: string, id: number) => Promise<boolean>
+    getScheduledPosts: () => Promise<any[]>
+    deleteScheduledPost: (id: number) => Promise<boolean>
+    createBackup: () => Promise<import('./backup').BackupMetadata>
+    listBackups: () => Promise<import('./backup').BackupListItem[]>
+    restoreBackup: (fileName: string) => Promise<import('./backup').BackupMetadata>
+    exportData: (includeMedia?: boolean) => Promise<import('./backup').ExportResult | { canceled: true }>
     previewTwitterHandleRebuild: (handle: string) => Promise<{ handle: string; activeTwitterScheduledPostCount: number }>
     startTwitterHandleRebuild: (handle: string, previewCount: number) => Promise<{ success: boolean; profile: any; archivedCount: number }>
     onTwitterHandleRebuildProgress: (cb: (event: { phase: string; message?: string; name?: string; args?: unknown; result?: unknown; text?: string; model?: string }) => void) => () => void
@@ -14,14 +17,16 @@ interface Window {
     checkCliAuth: (name: 'twitter' | 'rdt') => Promise<any>
     twitterTweet: (tweetId: string, max?: number) => Promise<any>
     redditRead: (postId: string, maxComments?: number) => Promise<any>
-    runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[]) => Promise<any>
+    runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => Promise<any>
+    getOnboardingResume: () => Promise<{ runId: string; phase: string; status: string; checkpointJson: string } | null>
+    checkpointOnboarding: (runId: string, phase: 'gather' | 'interview', messages: any[], pendingQuestion?: { batchId: string; questionIds: string[] }) => Promise<{ success: boolean }>
     resetOnboarding: () => Promise<any>
-    onOnboardingChunk: (cb: (text: string) => void) => void
-    onOnboardingToolCall: (cb: (data: { name: string, args: any }) => void) => void
-    onOnboardingToolResult: (cb: (data: { name: string, result: any }) => void) => void
-    onOnboardingReasoning: (cb: (text: string) => void) => void
-    onOnboardingTransientRetry: (cb: (info: { attempt: number; maxAttempts: number; backoffMs: number; model: string }) => void) => void
-    onOnboardingQuestion: (cb: (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) => void) => void
+    onOnboardingChunk: (cb: (text: string) => void) => () => void
+    onOnboardingToolCall: (cb: (data: { name: string, args: any }) => void) => () => void
+    onOnboardingToolResult: (cb: (data: { name: string, result: any }) => void) => () => void
+    onOnboardingReasoning: (cb: (text: string) => void) => () => void
+    onOnboardingTransientRetry: (cb: (info: { attempt: number; maxAttempts: number; backoffMs: number; model: string }) => void) => () => void
+    onOnboardingQuestion: (cb: (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) => void) => () => void
     sendOnboardingAnswer: (id: string, answers: { id: string; answer: string | string[] }[]) => void
     saveOnboardingConversation: (messages: { role: string; content: string; steps?: any[] }[]) => Promise<number>
     retryOnboardingAuth: (id: string, action: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort' | boolean) => void
@@ -32,7 +37,7 @@ interface Window {
       canSkipTwitter?: boolean
       canSkipReddit?: boolean
       canProceedPartial?: boolean
-    }) => void) => void
+    }) => void) => () => void
     chatSend: (messages: any[], options?: { model?: string; effort?: string }, sessionId?: number) => Promise<any>
     chatInject: (payload: any, sessionId?: number) => Promise<any>
     chatStop: (sessionId?: number) => Promise<any>
@@ -54,7 +59,7 @@ interface Window {
     onChatChunk: (cb: (data: { text: string; sessionId: number }) => void) => () => void
     onChatToolCall: (cb: (data: { name: string; args: any; sessionId: number }) => void) => () => void
     onChatToolResult: (cb: (data: { name: string; result: any; sessionId: number }) => void) => () => void
-    onChatError: (cb: (data: { error: string; sessionId: number }) => void) => () => void
+    onChatError: (cb: (data: { error: string; appError?: import('./app-error').AppError; sessionId: number }) => void) => () => void
     onChatReasoning: (cb: (data: { text: string; sessionId: number }) => void) => () => void
     onChatTransientRetry: (cb: (info: { attempt: number; maxAttempts: number; backoffMs: number; model: string; sessionId: number }) => void) => () => void
     onChatInjected: (cb: (data: { messages: any[]; sessionId: number }) => void) => () => void

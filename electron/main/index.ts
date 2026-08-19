@@ -1,15 +1,20 @@
 import { app, BrowserWindow, ipcMain, shell, protocol, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
-import { readFileSync, existsSync } from 'fs'
+import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
-import { getDb, getProfile, updateProfile, queryAll, insertRow, deleteRow, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, updateChatSessionContextSummary, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getApiTier, setApiTier, getAvailableModels, getDefaultModel, getApiKeys, addApiKey, removeApiKey, getModelExhaustionStatus, getSelectedModel, setSelectedModel } from './db'
-import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, checkCli, checkCliAuth, runCli } from './cli'
+import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, updateChatSessionContextSummary, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getApiTier, setApiTier, saveOnboardingCheckpoint, getLatestResumableOnboardingRun, quarantineOnboardingRun } from './db'
+import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
 import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, createChatTools, installChatAnswerListener, clearPendingChatQuestions, ONBOARDING_MODEL_FALLBACK, CHAT_MODEL_FALLBACK_PRO, CHAT_MODEL_FALLBACK_FREE, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
-import { isTwitterHandleRebuildActive, previewTwitterHandleRebuild, startTwitterHandleRebuild } from './twitter-handle-rebuild'
+import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
 import { detectApiTier } from './api-tier'
 import { logger } from './log'
+import { registerIpcHandlers } from './ipc/register'
+import { createRunId, errorForRenderer } from './errors'
+import { createOnboardingCheckpoint, parseOnboardingCheckpoint } from './onboarding-run'
+import { PendingRequestRegistry } from './onboarding-recovery'
+import { scheduleAutomaticBackups, stopAutomaticBackups } from './backup'
 
 type Message = { role: string; content: string | null; parts?: any[]; tool_call_id?: string; tool_calls?: any[]; attachments_json?: string | null }
 
@@ -137,7 +142,26 @@ function createWindow() {
   })
 
   mainWindow.on('ready-to-show', () => {
+    logger.info('main', 'renderer ready to show')
     mainWindow?.show()
+  })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    logger.info('main', `renderer finished loading ${mainWindow?.webContents.getURL()}`)
+  })
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    logger.error('main', `renderer failed to load ${validatedURL} [${errorCode}] ${errorDescription}`)
+  })
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logger.error('main', `renderer process exited: ${details.reason} (${details.exitCode})`)
+  })
+
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const context = `${sourceId || 'renderer'}:${line}`
+    if (level >= 2) logger.error('renderer', `${message} (${context})`)
+    else logger.debug('renderer', `${message} (${context})`)
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -184,6 +208,7 @@ app.whenReady().then(() => {
   syncMacDockIcon()
   if (process.platform !== 'darwin') setupTray()
   createWindow()
+  scheduleAutomaticBackups()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -191,22 +216,34 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  cancelPendingAuthRetries()
+  clearPendingQuestions()
+  clearPendingChatQuestions()
   if (process.platform !== 'darwin') app.quit()
 })
 
+app.on('before-quit', () => {
+  stopAutomaticBackups()
+  cancelPendingAuthRetries()
+  clearPendingQuestions()
+  clearPendingChatQuestions()
+})
+
 // Onboarding auth gate: blocks gather until X/Reddit cookies are present.
-const pendingAuthRetries = new Map<string, (action: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort') => void>()
+type AuthRetryAction = 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort'
+const pendingAuthRetries = new PendingRequestRegistry<AuthRetryAction>()
 let authRetryListenerInstalled = false
+
+function cancelPendingAuthRetries() {
+  pendingAuthRetries.cancelAll('abort')
+}
+
 function installAuthRetryListener() {
   if (authRetryListenerInstalled) return
   authRetryListenerInstalled = true
   ipcMain.on('onboarding:retryAuth', (_e, { id, action, retry }: { id: string; action?: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort'; retry?: boolean }) => {
-    const resolve = pendingAuthRetries.get(id)
-    if (resolve) {
-      pendingAuthRetries.delete(id)
-      const act = action || (retry ? 'retry' : 'abort')
-      resolve(act)
-    }
+    const act = action || (retry ? 'retry' : 'abort')
+    pendingAuthRetries.resolve(id, act)
   })
 }
 
@@ -223,86 +260,47 @@ function setupIpc() {
   logger.info('main', 'registering IPC handlers')
   installAuthRetryListener()
 
-  ipcMain.handle('db:getProfile', () => {
-    const p = getProfile()
-    logger.debug('main', 'db:getProfile', { id: p?.id, name: p?.name })
-    return p
+  registerIpcHandlers({
+    getWindow: () => mainWindow,
+    isProfileRebuildActive: isTwitterHandleRebuildActive,
+    hasActiveRun: () => activeChatRunsCount > 0 || activeOnboardingRuns > 0 || quickActionsActive,
+    registerStatefulHandlers: () => {
+      // Stateful onboarding and chat handlers are registered below in this composition root.
+    },
   })
 
-  ipcMain.handle('db:updateProfile', (_e, data) => {
-    if (isTwitterHandleRebuildActive()) throw new Error('Profile rebuild in progress. Try again after it finishes.')
-    logger.info('main', 'db:updateProfile', Object.keys(data))
-    return updateProfile(data)
-  })
-
-  ipcMain.handle('db:query', (_e, table: string, where?: string, params?: any[]) => {
-    logger.debug('main', `db:query ${table}`, { where, params })
-    return queryAll(table, where, params)
-  })
-
-  ipcMain.handle('db:insert', (_e, table: string, data: Record<string, any>) => {
-    if (isTwitterHandleRebuildActive()) throw new Error('Profile rebuild in progress. Try again after it finishes.')
-    logger.debug('main', `db:insert ${table}`, Object.keys(data))
-    return insertRow(table, data)
-  })
-
-  ipcMain.handle('db:delete', (_e, table: string, id: number) => {
-    if (isTwitterHandleRebuildActive()) throw new Error('Profile rebuild in progress. Try again after it finishes.')
-    logger.info('main', `db:delete ${table} id=${id}`)
-    return deleteRow(table, id)
-  })
-
-  ipcMain.handle('twitterHandleRebuild:preview', (_e, handle: string) => {
-    logger.info('main', 'twitterHandleRebuild:preview')
-    return previewTwitterHandleRebuild(handle)
-  })
-
-  ipcMain.handle('twitterHandleRebuild:start', async (_e, handle: string, previewCount: number) => {
-    logger.info('main', 'twitterHandleRebuild:start')
-    return startTwitterHandleRebuild(handle, previewCount, mainWindow, () => activeChatRunsCount > 0 || activeOnboardingRuns > 0 || quickActionsActive)
-  })
-
-  ipcMain.handle('cli:check', async (_e, name: 'twitter' | 'rdt') => checkCli(name))
-
-  ipcMain.handle('cli:install', async (_e, name: 'twitter' | 'rdt') => ensureCliInstalled(name))
-
-  ipcMain.handle('cli:checkAuth', async (_e, name: 'twitter' | 'rdt') => {
-    logger.info('main', `cli:checkAuth ${name}`)
-    const result = await checkCliAuth(name)
-    logger.info('main', `cli:checkAuth ${name} result`, { ok: result.ok, error: result.error })
-    return result
-  })
-
-  ipcMain.handle('cli:twitterTweet', async (_e, tweetId: string, max?: number) => {
-    logger.info('main', `cli:twitterTweet ${tweetId}`)
-    const args = ['tweet', tweetId, '--json']
-    if (max) args.push('-n', String(max))
-    return runCli('twitter', args)
-  })
-
-  ipcMain.handle('cli:redditRead', async (_e, postId: string, maxComments?: number) => {
-    logger.info('main', `cli:redditRead ${postId}`)
-    const args = ['read', postId, '--json']
-    if (maxComments) args.push('-n', String(maxComments))
-    return runCli('rdt', args)
-  })
-
-  ipcMain.handle('onboarding:run', async (_e, profileData: Record<string, any>, continueFromMessages?: any[]) => {
+  ipcMain.handle('onboarding:run', async (_e, profileData: Record<string, any>, continueFromMessages?: any[], requestedRunId?: string) => {
+    const runId = requestedRunId || createRunId('onboarding')
     logger.info('main', 'onboarding:run started', Object.keys(profileData))
     if (isTwitterHandleRebuildActive()) {
-      return { success: false, error: 'Wait for the Twitter handle rebuild to finish before starting onboarding.' }
+      const appError = errorForRenderer('Wait for the Twitter handle rebuild to finish before starting onboarding.', { runId })
+      return { success: false, error: appError.message, appError, runId }
     }
     activeOnboardingRuns++
     try {
+      const checkpoint = createOnboardingCheckpoint(runId, continueFromMessages || [])
+      checkpoint.phase = continueFromMessages?.length ? 'interview' : 'gather'
+      saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint)
       updateProfile(profileData)
       const profile = getProfile()
       clearPendingQuestions()
 
       const sendChunk = (text: string) => mainWindow?.webContents.send('onboarding:chunk', text)
       const sendToolCall = (name: string, args: any) => mainWindow?.webContents.send('onboarding:toolCall', { name, args })
-      const sendToolResult = (name: string, result: any) => mainWindow?.webContents.send('onboarding:toolResult', { name, result })
-      const sendQuestions = (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) =>
+      const sendToolResult = (name: string, result: any) => {
+        checkpoint.lastCompletedTool = name
+        saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint)
+        mainWindow?.webContents.send('onboarding:toolResult', { name, result })
+      }
+      const sendQuestions = (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) => {
+        checkpoint.phase = 'interview'
+        checkpoint.pendingQuestion = {
+          batchId: payload.batchId,
+          questionIds: payload.questions.map(question => question.id),
+        }
+        saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint)
         mainWindow?.webContents.send('onboarding:question', payload)
+      }
 
       // ─── Phase 0: Detect API tier (silent background) ───────────────────────
       try {
@@ -407,9 +405,7 @@ function setupIpc() {
               canProceedPartial,
             })
 
-            const action = await new Promise<'retry' | 'skip_twitter' | 'skip_reddit' | 'abort'>((resolve) =>
-              pendingAuthRetries.set(id, resolve)
-            )
+            const action = await pendingAuthRetries.wait(id)
 
             if (action === 'abort') return { aborted: true }
             if (action === 'skip_twitter') {
@@ -522,15 +518,27 @@ function setupIpc() {
         })
 
         if (result.error) {
-          logger.error('main', `onboarding failed: ${result.error}`)
-          return { success: false, error: result.error }
+          const appError = errorForRenderer(result.error, { runId })
+          logger.error('operational', `onboarding failed [${appError.code}]`, {
+            code: appError.code,
+            category: appError.category,
+            runId,
+          })
+          checkpoint.phase = 'failed'
+          checkpoint.status = 'failed'
+          saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint, appError.code)
+          return { success: false, error: appError.message, appError, runId }
         }
 
         logger.info('main', `onboarding complete (${result.text.length} chars)`)
         if (!result.text || result.text.trim().length === 0) {
           // Agent ended without producing a strategy (e.g. stream aborted mid-tool). Surface as retryable.
           logger.warn('main', 'onboarding produced empty output — returning retryable error')
-          return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
+          const appError = errorForRenderer('Onboarding ended without producing a strategy. Please retry.', { runId })
+          checkpoint.phase = 'failed'
+          checkpoint.status = 'failed'
+          saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint, appError.code)
+          return { success: false, error: appError.message, appError, runId }
         }
         
         // Re-assert original user-entered identity fields to guarantee zero corruption
@@ -541,8 +549,12 @@ function setupIpc() {
         if (currentProf?.reddit_username) safeUserIdentity.reddit_username = currentProf.reddit_username
         updateProfile(safeUserIdentity)
 
+        checkpoint.phase = 'complete'
+        checkpoint.status = 'complete'
+        checkpoint.completionCommitted = true
+        saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint)
         generateQuickActions().catch(() => {})
-        return { success: true, summary: result.text }
+        return { success: true, summary: result.text, runId }
       } else {
         // Continue from previous attempt - skip data gathering, go straight to AI
         logger.info('main', `continuing onboarding from ${continueFromMessages.length} messages`)
@@ -573,14 +585,26 @@ function setupIpc() {
         })
 
         if (result.error) {
-          logger.error('main', `onboarding continuation failed: ${result.error}`)
-          return { success: false, error: result.error }
+          const appError = errorForRenderer(result.error, { runId })
+          logger.error('operational', `onboarding continuation failed [${appError.code}]`, {
+            code: appError.code,
+            category: appError.category,
+            runId,
+          })
+          checkpoint.phase = 'failed'
+          checkpoint.status = 'failed'
+          saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint, appError.code)
+          return { success: false, error: appError.message, appError, runId }
         }
 
         logger.info('main', `onboarding continuation complete (${result.text.length} chars)`)
         if (!result.text || result.text.trim().length === 0) {
           logger.warn('main', 'onboarding continuation produced empty output — returning retryable error')
-          return { success: false, error: 'Onboarding ended without producing a strategy. Please retry.' }
+          const appError = errorForRenderer('Onboarding ended without producing a strategy. Please retry.', { runId })
+          checkpoint.phase = 'failed'
+          checkpoint.status = 'failed'
+          saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint, appError.code)
+          return { success: false, error: appError.message, appError, runId }
         }
 
         // Re-assert original user-entered identity fields to guarantee zero corruption
@@ -591,9 +615,26 @@ function setupIpc() {
         if (currentProf?.reddit_username) safeUserIdentity.reddit_username = currentProf.reddit_username
         updateProfile(safeUserIdentity)
 
+        checkpoint.phase = 'complete'
+        checkpoint.status = 'complete'
+        checkpoint.completionCommitted = true
+        saveOnboardingCheckpoint(runId, checkpoint.phase, checkpoint.status, checkpoint)
         generateQuickActions().catch(() => {})
-        return { success: true, summary: result.text }
+        return { success: true, summary: result.text, runId }
       }
+    } catch (error) {
+      const appError = errorForRenderer(error, { runId })
+      logger.error('operational', `onboarding failed [${appError.code}]`, {
+        code: appError.code,
+        category: appError.category,
+        runId,
+      })
+      saveOnboardingCheckpoint(runId, 'failed', 'failed', {
+        ...createOnboardingCheckpoint(runId, continueFromMessages || []),
+        phase: 'failed',
+        status: 'failed',
+      }, appError.code)
+      return { success: false, error: appError.message, appError, runId }
     } finally {
       activeOnboardingRuns--
     }
@@ -606,45 +647,44 @@ function setupIpc() {
     return { success: true }
   })
 
-  ipcMain.handle('api:getTier', () => {
-    return getApiTier()
+  ipcMain.handle('onboarding:getResume', () => {
+    const run = getLatestResumableOnboardingRun()
+    if (!run) return null
+    let checkpoint: unknown
+    try {
+      checkpoint = JSON.parse(run.checkpoint_json)
+    } catch {
+      quarantineOnboardingRun(run.run_id)
+      return null
+    }
+    if (!parseOnboardingCheckpoint(checkpoint)) {
+      quarantineOnboardingRun(run.run_id)
+      return null
+    }
+    return {
+      runId: run.run_id,
+      phase: run.phase,
+      status: run.status,
+      checkpointJson: run.checkpoint_json,
+    }
   })
 
-  ipcMain.handle('api:getAvailableModels', () => {
-    return getAvailableModels()
+  ipcMain.handle('onboarding:checkpoint', (_e, runId: string, phase: 'gather' | 'interview', messages: any[], pendingQuestion?: { batchId: string; questionIds: string[] }) => {
+    if (!/^onboarding_[a-f0-9-]+$/.test(runId) || !Array.isArray(messages)) {
+      const appError = errorForRenderer('Invalid onboarding checkpoint')
+      return { success: false, error: appError.message, appError }
+    }
+    const checkpoint = createOnboardingCheckpoint(runId, messages)
+    checkpoint.phase = phase
+    if (pendingQuestion) checkpoint.pendingQuestion = pendingQuestion
+    if (!parseOnboardingCheckpoint(checkpoint)) {
+      const appError = errorForRenderer('Invalid onboarding checkpoint')
+      return { success: false, error: appError.message, appError }
+    }
+    saveOnboardingCheckpoint(runId, phase, 'running', checkpoint)
+    return { success: true }
   })
 
-  ipcMain.handle('api:getDefaultModel', () => {
-    return getDefaultModel()
-  })
-
-  ipcMain.handle('api:getSelectedModel', () => {
-    return getSelectedModel()
-  })
-
-  ipcMain.handle('api:setSelectedModel', (_e, model: string) => {
-    setSelectedModel(model)
-  })
-
-  ipcMain.handle('api:getApiKeys', (_e, provider: string = 'google') => {
-    return getApiKeys(provider)
-  })
-
-  ipcMain.handle('api:addApiKey', (_e, apiKey: string, provider: string = 'google') => {
-    return addApiKey(apiKey, provider)
-  })
-
-  ipcMain.handle('api:removeApiKey', (_e, id: number) => {
-    return removeApiKey(id)
-  })
-
-  ipcMain.handle('api:getModelExhaustionStatus', (_e, model: string) => {
-    return getModelExhaustionStatus(model)
-  })
-
-  ipcMain.handle('api:detectTier', async (_e, force?: boolean) => {
-    return await detectApiTier(force)
-  })
 
   ipcMain.handle('onboarding:saveConversation', async (_e, messages: { role: string; content: string; steps?: any[] }[]) => {
     const sessionId = Number(createChatSession('Onboarding'))
@@ -659,7 +699,8 @@ function setupIpc() {
   ipcMain.handle('chat:send', async (_e, messages: Message[], options?: { model?: string; effort?: string }, sessionId?: number) => {
     logger.info('main', `chat:send — ${messages.length} messages (session ${sessionId ?? 'none'})`, options)
     if (isTwitterHandleRebuildActive()) {
-      return { fullText: '', error: 'Wait for the Twitter handle rebuild to finish before sending a chat message.' }
+      const appError = errorForRenderer('Wait for the Twitter handle rebuild to finish before sending a chat message.', { runId: `chat_${sessionId ?? 0}` })
+      return { fullText: '', error: appError.message, appError }
     }
 
     activeChatRunsCount++
@@ -698,7 +739,8 @@ function setupIpc() {
           (name, result) => { if (name !== 'ask_user') mainWindow?.webContents.send('chat:toolResult', { name, result, sessionId: sid }) },
           () => resolve(),
           (error) => {
-            mainWindow?.webContents.send('chat:error', { error, sessionId: sid })
+            const appError = errorForRenderer(error, { runId: `chat_${sid}` })
+            mainWindow?.webContents.send('chat:error', { error: appError.message, appError, sessionId: sid })
             resolve()
           },
           (text) => mainWindow?.webContents.send('chat:reasoning', { text, sessionId: sid }),
@@ -740,9 +782,13 @@ function setupIpc() {
     const content = typeof payload === 'string' ? payload : payload.content
     const attachments = typeof payload === 'string' ? [] : payload.attachments || []
     const trimmed = content.trim()
-    if (!trimmed && attachments.length === 0) return { success: false, error: 'empty' }
+    if (!trimmed && attachments.length === 0) {
+      const appError = errorForRenderer('Request content is empty')
+      return { success: false, error: appError.message, appError }
+    }
     if (!run || run.abortController.signal.aborted) {
-      return { success: false, error: 'no active chat run for this session' }
+      const appError = errorForRenderer('No active chat run for this session', { runId: `chat_${sid}` })
+      return { success: false, error: appError.message, appError }
     }
     run.injectedMessages.push({
       role: 'user',
@@ -787,61 +833,6 @@ function setupIpc() {
 
   ipcMain.handle('chat:addMessage', (_e, sessionId: number, role: string, content: string, reasoning?: string, toolCallsJson?: string, attachmentsJson?: string) => {
     return addChatMessage(sessionId, role, content, reasoning, toolCallsJson, attachmentsJson)
-  })
-
-  ipcMain.handle('get:media', (_e, filename: string) => {
-    const mediaDir = join(app.getPath('userData'), 'media')
-    const filePath = join(mediaDir, filename)
-    try {
-      const data = readFileSync(filePath)
-      return { success: true, data: data.toString('base64'), mime: 'image/png' }
-    } catch {
-      return { success: false, error: 'File not found' }
-    }
-  })
-
-  ipcMain.handle('link:preview', async (_e, url: string) => {
-    if (!/^https?:\/\//i.test(url)) return { success: false, error: 'Invalid URL' }
-    try {
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        }
-      })
-      const html = await res.text()
-      const pick = (...patterns: RegExp[]) => {
-        for (const pattern of patterns) {
-          const m = html.match(pattern)
-          if (m?.[1]) return m[1].trim()
-        }
-        return ''
-      }
-      const decode = (value: string) => value
-        .replace(/&amp;/g, '&')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-
-      const title = decode(pick(
-        /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
-        /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i,
-        /<title[^>]*>([^<]+)<\/title>/i
-      ))
-      const description = decode(pick(
-        /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,
-        /<meta[^>]+name=["']twitter:description["'][^>]+content=["']([^"']+)["']/i,
-        /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i
-      ))
-      const image = decode(pick(
-        /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
-        /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i
-      ))
-      return { success: true, data: { url, title, description, image } }
-    } catch (error: any) {
-      return { success: false, error: error?.message || 'Failed to fetch preview' }
-    }
   })
 
   ipcMain.handle('chat:updateTitle', (_e, sessionId: number, title: string) => {

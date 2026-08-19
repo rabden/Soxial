@@ -23,7 +23,14 @@ export default defineConfig({
     root: 'src',
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/index.html') }
+        input: { index: resolve(__dirname, 'src/index.html') },
+        output: {
+          manualChunks: {
+            markdown: ['streamdown', '@streamdown/cjk', '@streamdown/code', '@streamdown/math'],
+            mermaid: ['@streamdown/mermaid'],
+            socialEmbeds: ['react-tweet'],
+          },
+        },
       }
     },
     resolve: {

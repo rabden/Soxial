@@ -4,13 +4,19 @@ import { join } from 'path'
 import { readFileSync } from 'fs'
 import { seedDatabase } from './seed'
 import { logger } from './log'
+import { credentialFingerprint, deleteCredential, getCredential, saveCredential } from './credentials'
+import { runMigrations } from './db-migrations'
 
 let db: Database.Database | null = null
+
+export function getDatabasePath(): string {
+  return join(app.getPath('userData'), 'soxial.db')
+}
 
 export function getDb(): Database.Database {
   if (db) return db
 
-  const dbPath = join(app.getPath('userData'), 'soxial.db')
+  const dbPath = getDatabasePath()
   logger.info('db', `opening database: ${dbPath}`)
   db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
@@ -20,6 +26,22 @@ export function getDb(): Database.Database {
   seedDatabase(db)
 
   return db
+}
+
+export function getSchemaVersion(database: Database.Database = getDb()): number {
+  const row = database.pragma('user_version', { simple: true })
+  return Number(row) || 0
+}
+
+export function closeDb(): void {
+  if (!db) return
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)')
+  } catch (error) {
+    logger.warn('db', 'WAL checkpoint before close failed', error)
+  }
+  db.close()
+  db = null
 }
 
 function initSchema(db: Database.Database) {
@@ -201,7 +223,9 @@ function initSchema(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS api_keys (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      api_key TEXT NOT NULL,
+      api_key TEXT,
+      credential_ref TEXT,
+      fingerprint TEXT,
       provider TEXT DEFAULT 'google',
       tier TEXT DEFAULT 'unknown',
       is_active INTEGER DEFAULT 1,
@@ -226,6 +250,7 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_api_keys_active
       ON api_keys(is_active);
   `)
+  runMigrations(db)
 
   // Migration: add context_summary if missing
   const cols = db.pragma('table_info(chat_sessions)') as any[]
@@ -279,9 +304,65 @@ function initSchema(db: Database.Database) {
   }
 
   // Migration: add tier column to api_keys if missing
-  const apiKeyCols = db.pragma('table_info(api_keys)') as any[]
+  let apiKeyCols = db.pragma('table_info(api_keys)') as any[]
+  const legacyApiKeyColumn = apiKeyCols.find((c: any) => c.name === 'api_key')
+  if (legacyApiKeyColumn?.notnull === 1) {
+    // Older databases declared api_key NOT NULL. Credential migration needs to
+    // clear that column after moving the value to the OS credential vault.
+    // API-key usage cooldowns are ephemeral, so recreate that table as part of
+    // the same compatibility migration to avoid leaving a foreign-key pointer
+    // to the renamed legacy table.
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE IF EXISTS model_exhaustion;
+      ALTER TABLE api_keys RENAME TO api_keys_legacy_notnull;
+      CREATE TABLE api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        api_key TEXT,
+        credential_ref TEXT,
+        fingerprint TEXT,
+        provider TEXT DEFAULT 'google',
+        tier TEXT DEFAULT 'unknown',
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now')),
+        last_used_at TEXT
+      );
+      INSERT INTO api_keys (id, name, api_key, provider, is_active, created_at, last_used_at)
+        SELECT id, name, api_key, provider, is_active, created_at, last_used_at
+        FROM api_keys_legacy_notnull;
+      DROP TABLE api_keys_legacy_notnull;
+      CREATE TABLE model_exhaustion (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        model TEXT NOT NULL,
+        api_key_id INTEGER,
+        exhausted_at TEXT NOT NULL,
+        available_at TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_model_exhaustion_model ON model_exhaustion(model);
+      CREATE INDEX IF NOT EXISTS idx_model_exhaustion_available ON model_exhaustion(available_at);
+      PRAGMA foreign_keys = ON;
+    `)
+    apiKeyCols = db.pragma('table_info(api_keys)') as any[]
+  }
   if (!apiKeyCols.some((c: any) => c.name === 'tier')) {
     db.exec('ALTER TABLE api_keys ADD COLUMN tier TEXT DEFAULT \'unknown\'')
+  }
+  if (!apiKeyCols.some((c: any) => c.name === 'credential_ref')) {
+    db.exec('ALTER TABLE api_keys ADD COLUMN credential_ref TEXT')
+  }
+  if (!apiKeyCols.some((c: any) => c.name === 'fingerprint')) {
+    db.exec('ALTER TABLE api_keys ADD COLUMN fingerprint TEXT')
+  }
+  // Migrate legacy plaintext key rows into the OS-encrypted credential vault.
+  const legacyApiKeys = db.prepare('SELECT id, api_key FROM api_keys WHERE api_key IS NOT NULL AND api_key != \'\'').all() as { id: number; api_key: string }[]
+  for (const row of legacyApiKeys) {
+    const ref = `api-key-${row.id}`
+    saveCredential(ref, row.api_key)
+    db.prepare('UPDATE api_keys SET api_key = NULL, credential_ref = ?, fingerprint = ? WHERE id = ?')
+      .run(ref, credentialFingerprint(row.api_key), row.id)
   }
 
   // Migration: normalize legacy custom-named additional keys to the "Key N" scheme.
@@ -335,6 +416,9 @@ function initSchema(db: Database.Database) {
   const profileKeys = db.prepare('SELECT gemini_api_key, zai_api_key FROM user_profile WHERE id = 1').get() as any
   if (profileKeys?.gemini_api_key) syncPrimaryKeyToApiKeys(profileKeys.gemini_api_key, 'google')
   if (profileKeys?.zai_api_key) syncPrimaryKeyToApiKeys(profileKeys.zai_api_key, 'zhipu')
+  if (profileKeys?.gemini_api_key || profileKeys?.zai_api_key) {
+    db.prepare('UPDATE user_profile SET gemini_api_key = NULL, zai_api_key = NULL WHERE id = 1').run()
+  }
 
   // Dedup: if any stale duplicate 'Primary' rows survived from the old insert-only
   // logic, keep only the newest one per provider and deactivate the rest.
@@ -357,35 +441,101 @@ export function getChatSessionSteps(sessionId: number): { steps: any[]; userCoun
   }
 }
 
+export interface OnboardingRunRow {
+  run_id: string
+  phase: string
+  status: string
+  checkpoint_json: string
+  last_error_code: string | null
+  started_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export function saveOnboardingCheckpoint(runId: string, phase: string, status: string, checkpoint: unknown, errorCode?: string): void {
+  getDb().prepare(`
+    INSERT INTO onboarding_runs (run_id, phase, status, checkpoint_json, last_error_code, updated_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now'), CASE WHEN ? IN ('complete', 'failed', 'cancelled') THEN datetime('now') ELSE NULL END)
+    ON CONFLICT(run_id) DO UPDATE SET
+      phase = excluded.phase,
+      status = excluded.status,
+      checkpoint_json = excluded.checkpoint_json,
+      last_error_code = excluded.last_error_code,
+      updated_at = excluded.updated_at,
+      completed_at = excluded.completed_at
+  `).run(runId, phase, status, JSON.stringify(checkpoint), errorCode ?? null, status)
+}
+
+export function getLatestResumableOnboardingRun(): OnboardingRunRow | null {
+  return (getDb().prepare(`
+    SELECT *
+    FROM onboarding_runs
+    WHERE status IN ('running', 'paused', 'failed')
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `).get() as OnboardingRunRow | undefined) ?? null
+}
+
+export function quarantineOnboardingRun(runId: string): void {
+  getDb().prepare(`
+    UPDATE onboarding_runs
+    SET checkpoint_backup_json = checkpoint_json,
+        status = 'failed',
+        phase = 'failed',
+        last_error_code = 'CHECKPOINT_CORRUPT',
+        updated_at = datetime('now'),
+        completed_at = datetime('now')
+    WHERE run_id = ?
+  `).run(runId)
+}
+
+export function clearOnboardingRun(runId: string): void {
+  getDb().prepare('DELETE FROM onboarding_runs WHERE run_id = ?').run(runId)
+}
+
 export function updateChatSessionSteps(sessionId: number, steps: any[], userCount: number) {
   getDb().prepare('UPDATE chat_sessions SET steps_json = ?, steps_user_count = ?, updated_at = datetime(\'now\') WHERE id = ?')
     .run(JSON.stringify(steps), userCount, sessionId)
 }
 
 export function getProfile() {
-  return getDb().prepare('SELECT * FROM user_profile WHERE id = 1').get() as any
+  const profile = getDb().prepare('SELECT * FROM user_profile WHERE id = 1').get() as any
+  if (!profile) return profile
+  for (const [field, provider] of [['gemini_api_key', 'google'], ['zai_api_key', 'zhipu']]) {
+    const row = getDb().prepare("SELECT credential_ref, api_key FROM api_keys WHERE provider = ? AND name = 'Primary' AND is_active = 1 ORDER BY id DESC LIMIT 1").get(provider) as any
+    profile[field] = row ? (getCredential(row.credential_ref) || row.api_key || null) : null
+  }
+  return profile
 }
 
 export function syncPrimaryKeyToApiKeys(apiKey: string, provider: 'google' | 'zhipu' = 'google'): void {
   const db = getDb()
 
   // If the exact key already exists and is active, just rename it to Primary
-  const existing = db.prepare('SELECT id FROM api_keys WHERE api_key = ? AND provider = ? AND is_active = 1').get(apiKey, provider) as any
+  const fingerprint = credentialFingerprint(apiKey)
+  const existing = db.prepare('SELECT id, credential_ref FROM api_keys WHERE fingerprint = ? AND provider = ? AND is_active = 1').get(fingerprint, provider) as any
   if (existing) {
-    db.prepare("UPDATE api_keys SET name = 'Primary' WHERE id = ?").run(existing.id)
+    const ref = existing.credential_ref || `api-key-${existing.id}`
+    saveCredential(ref, apiKey)
+    db.prepare("UPDATE api_keys SET credential_ref = ?, fingerprint = ?, api_key = NULL, name = 'Primary' WHERE id = ?").run(ref, fingerprint, existing.id)
     return
   }
 
   // Key changed: update the existing 'Primary' row for this provider in-place
   // (avoids duplicate active rows; resets tier since the new key may differ in capability)
-  const currentPrimary = db.prepare("SELECT id FROM api_keys WHERE name = 'Primary' AND provider = ? AND is_active = 1").get(provider) as any
+  const currentPrimary = db.prepare("SELECT id, credential_ref FROM api_keys WHERE name = 'Primary' AND provider = ? AND is_active = 1").get(provider) as any
   if (currentPrimary) {
-    db.prepare("UPDATE api_keys SET api_key = ?, tier = 'unknown' WHERE id = ?").run(apiKey, currentPrimary.id)
+    const ref = currentPrimary.credential_ref || `api-key-${currentPrimary.id}`
+    saveCredential(ref, apiKey)
+    db.prepare("UPDATE api_keys SET credential_ref = ?, fingerprint = ?, api_key = NULL, tier = 'unknown' WHERE id = ?").run(ref, fingerprint, currentPrimary.id)
     return
   }
 
   // No existing primary at all: insert new
-  db.prepare("INSERT INTO api_keys (name, api_key, provider) VALUES ('Primary', ?, ?)").run(apiKey, provider)
+  const result = db.prepare("INSERT INTO api_keys (name, credential_ref, fingerprint, provider) VALUES ('Primary', ?, ?, ?)").run('', fingerprint, provider)
+  const ref = `api-key-${result.lastInsertRowid}`
+  saveCredential(ref, apiKey)
+  db.prepare('UPDATE api_keys SET credential_ref = ? WHERE id = ?').run(ref, result.lastInsertRowid)
 }
 
 export function updateProfile(data: Record<string, any>) {
@@ -394,16 +544,15 @@ export function updateProfile(data: Record<string, any>) {
   if (existing.c === 0) {
     db.prepare('INSERT INTO user_profile (id) VALUES (1)').run()
   }
-  const keys = Object.keys(data).filter(k => data[k] !== undefined)
+  if (data.gemini_api_key) syncPrimaryKeyToApiKeys(data.gemini_api_key, 'google')
+  if (data.zai_api_key) syncPrimaryKeyToApiKeys(data.zai_api_key, 'zhipu')
+  const profileData = { ...data }
+  delete profileData.gemini_api_key
+  delete profileData.zai_api_key
+  const keys = Object.keys(profileData).filter(k => profileData[k] !== undefined)
   const sets = keys.map(k => `${k} = @${k}`).join(', ')
   if (sets) {
-    db.prepare(`UPDATE user_profile SET ${sets} WHERE id = 1`).run(data)
-  }
-  if (data.gemini_api_key) {
-    syncPrimaryKeyToApiKeys(data.gemini_api_key, 'google')
-  }
-  if (data.zai_api_key) {
-    syncPrimaryKeyToApiKeys(data.zai_api_key, 'zhipu')
+    db.prepare(`UPDATE user_profile SET ${sets} WHERE id = 1`).run(profileData)
   }
   return getProfile()
 }
@@ -411,6 +560,18 @@ export function updateProfile(data: Record<string, any>) {
 export function queryAll(table: string, where?: string, params?: any[]) {
   const sql = where ? `SELECT * FROM ${table} WHERE ${where}` : `SELECT * FROM ${table}`
   return getDb().prepare(sql).all(...(params || []))
+}
+
+export function getScheduledPosts(statuses: string[] = ['draft', 'scheduled']) {
+  if (statuses.length === 0) return []
+  const placeholders = statuses.map(() => '?').join(', ')
+  return getDb().prepare(`
+    SELECT id, platform, type, text, media_path, hashtags, first_reply,
+           scheduled_time, status, result_json, created_at
+    FROM scheduled_posts
+    WHERE status IN (${placeholders})
+    ORDER BY scheduled_time ASC, created_at DESC
+  `).all(...statuses)
 }
 
 export function insertRow(table: string, data: Record<string, any>) {
@@ -826,14 +987,19 @@ export function setSelectedModel(model: string): void {
 
 export function getApiKeys(provider: string = 'google'): Array<{ id: number; name: string; api_key: string; provider: string; tier: string; is_active: number; created_at: string; last_used_at: string | null }> {
   const db = getDb()
-  return db.prepare('SELECT * FROM api_keys WHERE provider = ? AND is_active = 1 ORDER BY created_at ASC').all(provider) as any[]
+  return (db.prepare('SELECT * FROM api_keys WHERE provider = ? AND is_active = 1 ORDER BY created_at ASC').all(provider) as any[])
+    .map(row => ({ ...row, api_key: getCredential(row.credential_ref) || row.api_key || '' }))
 }
 
 export function addApiKey(apiKey: string, provider: string = 'google'): number {
   const db = getDb()
   const name = nextKeyName(db, provider)
-  const result = db.prepare('INSERT INTO api_keys (name, api_key, provider) VALUES (?, ?, ?)').run(name, apiKey, provider)
-  return result.lastInsertRowid as number
+  const result = db.prepare('INSERT INTO api_keys (name, credential_ref, fingerprint, provider) VALUES (?, ?, ?, ?)').run(name, '', credentialFingerprint(apiKey), provider)
+  const id = result.lastInsertRowid as number
+  const ref = `api-key-${id}`
+  saveCredential(ref, apiKey)
+  db.prepare('UPDATE api_keys SET credential_ref = ? WHERE id = ?').run(ref, id)
+  return id
 }
 
 // Auto-name nameless keys as "Key N" (N = max existing numeric suffix + 1), scoped per provider.
@@ -849,7 +1015,9 @@ function nextKeyName(db: Database.Database, provider: string = 'google'): string
 
 export function removeApiKey(id: number): void {
   const db = getDb()
+  const row = db.prepare('SELECT credential_ref FROM api_keys WHERE id = ?').get(id) as any
   db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ?').run(id)
+  if (row?.credential_ref) deleteCredential(row.credential_ref)
 }
 
 export function updateApiKeyLastUsed(id: number): void {
@@ -864,7 +1032,8 @@ export function updateApiKeyTier(id: number, tier: 'free' | 'pro'): void {
 
 export function getApiKeysByTier(tier: 'free' | 'pro', provider: string = 'google'): Array<{ id: number; name: string; api_key: string; tier: string; is_active: number; created_at: string; last_used_at: string | null }> {
   const db = getDb()
-  return db.prepare('SELECT * FROM api_keys WHERE provider = ? AND tier = ? AND is_active = 1 ORDER BY created_at ASC').all(provider, tier) as any[]
+  return (db.prepare('SELECT * FROM api_keys WHERE provider = ? AND tier = ? AND is_active = 1 ORDER BY created_at ASC').all(provider, tier) as any[])
+    .map(row => ({ ...row, api_key: getCredential(row.credential_ref) || row.api_key || '' }))
 }
 
 export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' | 'pro', excludeApiKeyIds?: number[]): { id: number; api_key: string } | null {
@@ -880,7 +1049,7 @@ export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' 
 
   // Build query with optional tier filter
   let query = `
-    SELECT id, api_key
+    SELECT id, credential_ref, api_key
     FROM api_keys
     WHERE is_active = 1
     AND provider = ?
@@ -916,7 +1085,10 @@ export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' 
     return null
   }
   
-  return { id: availableKeys[0].id, api_key: availableKeys[0].api_key }
+  return {
+    id: availableKeys[0].id,
+    api_key: getCredential(availableKeys[0].credential_ref) || availableKeys[0].api_key || '',
+  }
 }
 
 export function markModelExhausted(model: string, apiKeyId: number | null): void {

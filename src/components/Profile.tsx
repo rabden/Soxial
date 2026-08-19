@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Save, Check, Plus, Trash2, ChevronDown, ChevronUp, KeyRound, Radio } from 'lucide-react'
+import { ArrowLeft, Save, Check, Plus, Trash2, ChevronDown, ChevronUp, KeyRound, Radio, Database, Download, Upload, RefreshCw, ShieldCheck } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { cn } from 'src/lib/utils'
 import { Message, MessageContent, MessageResponse } from './ai-elements/message'
+import type { BackupListItem } from 'src/types/backup'
 
 interface ProfileProps {
   profile: any;
@@ -39,8 +40,8 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
   const [activeTab, setActiveTab] = useState<'google' | 'zhipu'>('google')
   const [primaryGoogleKey, setPrimaryGoogleKey] = useState(profile?.gemini_api_key || '')
   const [primaryZhipuKey, setPrimaryZhipuKey] = useState(profile?.zai_api_key || '')
-  const [googleExtras, setGoogleExtras] = useState<Array<{ id?: number; value: string }>>([])
-  const [zhipuExtras, setZhipuExtras] = useState<Array<{ id?: number; value: string }>>([])
+  const [googleExtras, setGoogleExtras] = useState<Array<{ id?: number; value: string; masked?: string }>>([])
+  const [zhipuExtras, setZhipuExtras] = useState<Array<{ id?: number; value: string; masked?: string }>>([])
   const [codingPlan, setCodingPlan] = useState(profile?.zai_coding_plan === 1)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -51,16 +52,87 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
   const [rebuildPhase, setRebuildPhase] = useState('')
   const [rebuildError, setRebuildError] = useState('')
   const [rebuildResult, setRebuildResult] = useState<{ handle: string; archivedCount: number } | null>(null)
+  const [backups, setBackups] = useState<BackupListItem[]>([])
+  const [backupBusy, setBackupBusy] = useState(false)
+  const [backupMessage, setBackupMessage] = useState('')
+  const [includeMedia, setIncludeMedia] = useState(false)
 
   useEffect(() => {
     window.api.getApiKeys('google').then((keys: any[]) => {
-      setGoogleExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: k.api_key })))
+      setGoogleExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })))
       if (profile?.gemini_api_key) setPrimaryGoogleKey(profile.gemini_api_key)
     })
     window.api.getApiKeys('zhipu').then((keys: any[]) => {
-      setZhipuExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: k.api_key })))
+      setZhipuExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })))
     })
   }, [])
+
+  useEffect(() => {
+    void refreshBackups()
+  }, [])
+
+  const refreshBackups = async () => {
+    try {
+      setBackups(await window.api.listBackups())
+    } catch (error) {
+      setBackupMessage(error instanceof Error ? error.message : 'Could not load backups.')
+    }
+  }
+
+  const handleCreateBackup = async () => {
+    setBackupBusy(true)
+    setBackupMessage('')
+    try {
+      await window.api.createBackup()
+      await refreshBackups()
+      setBackupMessage('Verified backup created.')
+    } catch (error) {
+      setBackupMessage(error instanceof Error ? error.message : 'Backup creation failed.')
+    } finally {
+      setBackupBusy(false)
+    }
+  }
+
+  const handleRestoreBackup = async (backup: BackupListItem) => {
+    if (!backup.verified || !window.confirm(`Restore the backup from ${formatBackupDate(backup.createdAt)}? The current database will be backed up first.`)) return
+    setBackupBusy(true)
+    setBackupMessage('')
+    try {
+      await window.api.restoreBackup(backup.fileName)
+      window.location.reload()
+    } catch (error) {
+      setBackupMessage(error instanceof Error ? error.message : 'Restore failed. Your current data was preserved.')
+      setBackupBusy(false)
+    }
+  }
+
+  const handleExport = async () => {
+    setBackupBusy(true)
+    setBackupMessage('')
+    try {
+      const result = await window.api.exportData(includeMedia)
+      if (!('destination' in result)) {
+        setBackupBusy(false)
+        return
+      }
+      setBackupMessage(`Exported ${formatBytes(result.sizeBytes)} without credentials.`)
+    } catch (error) {
+      setBackupMessage(error instanceof Error ? error.message : 'Export failed.')
+    } finally {
+      setBackupBusy(false)
+    }
+  }
+
+  const formatBackupDate = (value: string) => {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleString()
+  }
+
+  const formatBytes = (value: number) => {
+    if (value < 1024) return `${value} B`
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  }
 
   const handleSaveKeys = async () => {
     if (rebuilding) return
@@ -654,6 +726,99 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                   {saved ? <Check className="size-3.5 stroke-[2.5]" /> : <Save className="size-3.5" />}
                 </span>
               </motion.button>
+            </div>
+          </div>
+        </motion.section>
+
+        {/* Backup and Export Section */}
+        <motion.section variants={itemVariants} className="py-10 border-t border-white/[0.03]">
+          <div className="flex items-start justify-between gap-4 mb-6">
+            <div>
+              <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 mb-2">
+                Data Protection
+              </h2>
+              <p className="text-xs text-zinc-500 leading-5 max-w-xl">
+                Verified SQLite snapshots protect your local workspace. Portable exports never include API keys, tokens, cookies, or credential vault data.
+              </p>
+            </div>
+            <Database className="size-4 text-zinc-600 shrink-0" />
+          </div>
+
+          <div className="p-1.5 rounded-3xl bg-white/[0.02] border border-white/[0.04]">
+            <div className="p-6 md:p-8 rounded-[calc(1.5rem+4px)] bg-[#0c0c10]/40 space-y-6">
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={handleCreateBackup}
+                  disabled={backupBusy || rebuilding}
+                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors disabled:opacity-40"
+                >
+                  <Database className="size-3.5" />
+                  {backupBusy ? 'Working…' : 'Backup now'}
+                </button>
+                <button
+                  onClick={handleExport}
+                  disabled={backupBusy || rebuilding}
+                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.06] text-zinc-200 text-xs font-bold hover:bg-white/[0.08] transition-colors disabled:opacity-40"
+                >
+                  <Download className="size-3.5" />
+                  Export data
+                </button>
+                <button
+                  onClick={() => void refreshBackups()}
+                  disabled={backupBusy}
+                  aria-label="Refresh backups"
+                  className="inline-flex items-center justify-center size-10 rounded-xl bg-white/[0.03] border border-white/[0.05] text-zinc-500 hover:text-white transition-colors disabled:opacity-40"
+                >
+                  <RefreshCw className="size-3.5" />
+                </button>
+              </div>
+
+              <label className="flex items-center gap-3 text-xs text-zinc-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeMedia}
+                  onChange={(event) => setIncludeMedia(event.target.checked)}
+                  disabled={backupBusy}
+                  className="accent-blue-500"
+                />
+                Include safe local media in ZIP exports
+              </label>
+
+              {backupMessage && (
+                <div role="status" aria-live="polite" className="text-xs text-emerald-200 bg-emerald-500/10 border border-emerald-500/15 rounded-xl px-4 py-3">
+                  {backupMessage}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {backups.length === 0 ? (
+                  <p className="text-xs text-zinc-600 py-3">No backups yet. Automatic backups run when the app is idle.</p>
+                ) : backups.map((backup) => (
+                  <div key={backup.fileName} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+                        <ShieldCheck className={cn('size-3.5', backup.verified ? 'text-emerald-400' : 'text-red-400')} />
+                        {formatBackupDate(backup.createdAt)}
+                        <span className="text-zinc-600">·</span>
+                        <span className="text-zinc-500">{backup.reason}</span>
+                      </div>
+                      <div className="text-[10px] text-zinc-600 mt-1">
+                        {formatBytes(backup.sizeBytes)} · schema {backup.schemaVersion} · {backup.verified ? 'verified' : backup.verificationError || 'invalid'}
+                      </div>
+                    </div>
+                    {backup.verified && (
+                      <button
+                        onClick={() => void handleRestoreBackup(backup)}
+                        disabled={backupBusy || rebuilding}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[10px] uppercase tracking-wider font-bold text-zinc-400 hover:text-white hover:bg-white/[0.05] transition-colors disabled:opacity-30"
+                      >
+                        <Upload className="size-3" />
+                        Restore
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </motion.section>

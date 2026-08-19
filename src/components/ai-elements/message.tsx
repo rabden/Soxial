@@ -2,9 +2,9 @@
 
 import { cn } from "src/lib/utils";
 import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
 import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
+import { curatedCodePlugin } from "src/lib/curated-code-plugin";
+import { lazyMermaidPlugin } from "src/lib/lazy-mermaid-plugin";
 import type { UIMessage } from "ai";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { memo } from "react";
@@ -48,7 +48,7 @@ export const MessageContent = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const streamdownPlugins = { cjk, code: curatedCodePlugin, math, mermaid: lazyMermaidPlugin };
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (

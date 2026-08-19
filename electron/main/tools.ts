@@ -194,9 +194,19 @@ export function createTools(opts?: {
         })).describe('Array of memory entries to save')
       }),
       execute: async ({ items }) => {
-        for (const m of items)
-          insertRow('memory_entries', m)
-        return { success: true, count: items.length }
+        const db = getDb()
+        let saved = 0
+        const save = db.transaction(() => {
+          for (const m of items) {
+            const exists = db.prepare('SELECT id FROM memory_entries WHERE type = ? AND title = ? AND content = ?')
+              .get(m.type, m.title, m.content)
+            if (exists) continue
+            insertRow('memory_entries', m)
+            saved++
+          }
+        })
+        save()
+        return { success: true, saved, skipped: items.length - saved, total: items.length }
       }
     },
 
@@ -235,18 +245,21 @@ export function createTools(opts?: {
       execute: async ({ items }) => {
         let saved = 0, updated = 0
         const db = getDb()
-        for (const p of items) {
-          const existing = db.prepare('SELECT id FROM content_pillars WHERE name = ?').get(p.name) as any
-          if (existing) {
-            db.prepare(`UPDATE content_pillars SET description=@description, structure=@structure,
-              frequency=@frequency, platform_adaptations=@platform_adaptations WHERE id=@id`)
-              .run({ ...p, id: existing.id })
-            updated++
-          } else {
-            insertRow('content_pillars', p)
-            saved++
+        const save = db.transaction(() => {
+          for (const p of items) {
+            const existing = db.prepare('SELECT id FROM content_pillars WHERE name = ?').get(p.name) as any
+            if (existing) {
+              db.prepare(`UPDATE content_pillars SET description=@description, structure=@structure,
+                frequency=@frequency, platform_adaptations=@platform_adaptations WHERE id=@id`)
+                .run({ ...p, id: existing.id })
+              updated++
+            } else {
+              insertRow('content_pillars', p)
+              saved++
+            }
           }
-        }
+        })
+        save()
         return { success: true, saved, updated, total: items.length }
       }
     },
@@ -265,12 +278,15 @@ export function createTools(opts?: {
       execute: async ({ items }) => {
         let saved = 0, skipped = 0
         const db = getDb()
-        for (const t of items) {
-          const exists = db.prepare('SELECT id FROM target_accounts WHERE platform = ? AND handle = ?').get(t.platform, t.handle)
-          if (exists) { skipped++; continue }
-          insertRow('target_accounts', t)
-          saved++
-        }
+        const save = db.transaction(() => {
+          for (const t of items) {
+            const exists = db.prepare('SELECT id FROM target_accounts WHERE platform = ? AND handle = ?').get(t.platform, t.handle)
+            if (exists) { skipped++; continue }
+            insertRow('target_accounts', t)
+            saved++
+          }
+        })
+        save()
         return { success: true, saved, skipped, total: items.length }
       }
     },
@@ -286,12 +302,15 @@ export function createTools(opts?: {
       execute: async ({ items }) => {
         let saved = 0, skipped = 0
         const db = getDb()
-        for (const v of items) {
-          const exists = db.prepare('SELECT id FROM voice_rules WHERE type = ? AND content = ?').get(v.type, v.content)
-          if (exists) { skipped++; continue }
-          insertRow('voice_rules', v)
-          saved++
-        }
+        const save = db.transaction(() => {
+          for (const v of items) {
+            const exists = db.prepare('SELECT id FROM voice_rules WHERE type = ? AND content = ?').get(v.type, v.content)
+            if (exists) { skipped++; continue }
+            insertRow('voice_rules', v)
+            saved++
+          }
+        })
+        save()
         return { success: true, saved, skipped, total: items.length }
       }
     },
@@ -313,21 +332,24 @@ export function createTools(opts?: {
       execute: async ({ items }) => {
         let saved = 0, updated = 0
         const db = getDb()
-        for (const h of items) {
-          const existing = db.prepare('SELECT id FROM hooks WHERE name = ?').get(h.name) as any
-          if (existing) {
-            db.prepare(`UPDATE hooks SET rank=@rank, category=@category, description=@description,
-              why_it_works=@why_it_works, template=@template, niche_examples=@niche_examples,
-              performance_notes=@performance_notes WHERE id=@id`)
-              .run({ ...h, why_it_works: h.why_it_works || null, template: h.template || null,
-                     niche_examples: h.niche_examples || null, performance_notes: h.performance_notes || null,
-                     id: existing.id })
-            updated++
-          } else {
-            insertRow('hooks', h)
-            saved++
+        const save = db.transaction(() => {
+          for (const h of items) {
+            const existing = db.prepare('SELECT id FROM hooks WHERE name = ?').get(h.name) as any
+            if (existing) {
+              db.prepare(`UPDATE hooks SET rank=@rank, category=@category, description=@description,
+                why_it_works=@why_it_works, template=@template, niche_examples=@niche_examples,
+                performance_notes=@performance_notes WHERE id=@id`)
+                .run({ ...h, why_it_works: h.why_it_works || null, template: h.template || null,
+                       niche_examples: h.niche_examples || null, performance_notes: h.performance_notes || null,
+                       id: existing.id })
+              updated++
+            } else {
+              insertRow('hooks', h)
+              saved++
+            }
           }
-        }
+        })
+        save()
         return { success: true, saved, updated, total: items.length }
       }
     },
@@ -345,16 +367,19 @@ export function createTools(opts?: {
       execute: async ({ items }) => {
         let saved = 0, updated = 0
         const db = getDb()
-        for (const a of items) {
-          const existing = db.prepare('SELECT id FROM algorithm_rules WHERE platform = ? AND signal = ?').get(a.platform, a.signal) as any
-          if (existing) {
-            db.prepare('UPDATE algorithm_rules SET weight = ?, description = ? WHERE id = ?').run(a.weight, a.description, existing.id)
-            updated++
-          } else {
-            insertRow('algorithm_rules', a)
-            saved++
+        const save = db.transaction(() => {
+          for (const a of items) {
+            const existing = db.prepare('SELECT id FROM algorithm_rules WHERE platform = ? AND signal = ?').get(a.platform, a.signal) as any
+            if (existing) {
+              db.prepare('UPDATE algorithm_rules SET weight = ?, description = ? WHERE id = ?').run(a.weight, a.description, existing.id)
+              updated++
+            } else {
+              insertRow('algorithm_rules', a)
+              saved++
+            }
           }
-        }
+        })
+        save()
         return { success: true, saved, updated, total: items.length }
       }
     },

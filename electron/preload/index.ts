@@ -1,12 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
+  const listener = (_event: Electron.IpcRendererEvent, payload: T) => cb(payload)
+  ipcRenderer.on(channel, listener)
+  return () => ipcRenderer.off(channel, listener)
+}
+
 const api = {
   platform: process.platform,
   getProfile: () => ipcRenderer.invoke('db:getProfile'),
   updateProfile: (data: Record<string, any>) => ipcRenderer.invoke('db:updateProfile', data),
-  dbQuery: (table: string, where?: string, params?: any[]) => ipcRenderer.invoke('db:query', table, where, params),
-  dbInsert: (table: string, data: Record<string, any>) => ipcRenderer.invoke('db:insert', table, data),
-  dbDelete: (table: string, id: number) => ipcRenderer.invoke('db:delete', table, id),
+  getScheduledPosts: () => ipcRenderer.invoke('scheduledPosts:list'),
+  deleteScheduledPost: (id: number) => ipcRenderer.invoke('scheduledPosts:delete', id),
+  createBackup: () => ipcRenderer.invoke('backup:create'),
+  listBackups: () => ipcRenderer.invoke('backup:list'),
+  restoreBackup: (fileName: string) => ipcRenderer.invoke('backup:restore', fileName),
+  exportData: (includeMedia?: boolean) => ipcRenderer.invoke('export:data', includeMedia),
 
   previewTwitterHandleRebuild: (handle: string) => ipcRenderer.invoke('twitterHandleRebuild:preview', handle),
   startTwitterHandleRebuild: (handle: string, previewCount: number) => ipcRenderer.invoke('twitterHandleRebuild:start', handle, previewCount),
@@ -22,27 +31,30 @@ const api = {
   twitterTweet: (tweetId: string, max?: number) => ipcRenderer.invoke('cli:twitterTweet', tweetId, max),
   redditRead: (postId: string, maxComments?: number) => ipcRenderer.invoke('cli:redditRead', postId, maxComments),
 
-  runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[]) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages),
+  runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages, runId),
+  getOnboardingResume: () => ipcRenderer.invoke('onboarding:getResume'),
+  checkpointOnboarding: (runId: string, phase: 'gather' | 'interview', messages: any[], pendingQuestion?: { batchId: string; questionIds: string[] }) =>
+    ipcRenderer.invoke('onboarding:checkpoint', runId, phase, messages, pendingQuestion),
   resetOnboarding: () => ipcRenderer.invoke('onboarding:reset'),
-  onOnboardingChunk: (cb: (text: string) => void) => ipcRenderer.on('onboarding:chunk', (_e, text) => cb(text)),
-  onOnboardingToolCall: (cb: (data: { name: string, args: any }) => void) => ipcRenderer.on('onboarding:toolCall', (_e, data) => cb(data)),
-  onOnboardingToolResult: (cb: (data: { name: string, result: any }) => void) => ipcRenderer.on('onboarding:toolResult', (_e, data) => cb(data)),
-  onOnboardingReasoning: (cb: (text: string) => void) => ipcRenderer.on('onboarding:reasoning', (_e, text) => cb(text)),
+  onOnboardingChunk: (cb: (text: string) => void) => subscribe('onboarding:chunk', cb),
+  onOnboardingToolCall: (cb: (data: { name: string, args: any }) => void) => subscribe('onboarding:toolCall', cb),
+  onOnboardingToolResult: (cb: (data: { name: string, result: any }) => void) => subscribe('onboarding:toolResult', cb),
+  onOnboardingReasoning: (cb: (text: string) => void) => subscribe('onboarding:reasoning', cb),
   onOnboardingTransientRetry: (cb: (info: { attempt: number; maxAttempts: number; backoffMs: number; model: string }) => void) =>
-    ipcRenderer.on('onboarding:transientRetry', (_e, info) => cb(info)),
+    subscribe('onboarding:transientRetry', cb),
   onOnboardingQuestion: (cb: (payload: { batchId: string; questions: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }[] }) => void) =>
-    ipcRenderer.on('onboarding:question', (_e, payload) => cb(payload)),
+    subscribe('onboarding:question', cb),
   sendOnboardingAnswer: (id: string, answers: { id: string; answer: string | string[] }[]) => ipcRenderer.send('onboarding:answer', { id, answers }),
   saveOnboardingConversation: (messages: { role: string; content: string; steps?: any[] }[]) => ipcRenderer.invoke('onboarding:saveConversation', messages),
   retryOnboardingAuth: (id: string, action: 'retry' | 'skip_twitter' | 'skip_reddit' | 'abort' | boolean) => ipcRenderer.send('onboarding:retryAuth', { id, action }),
   onOnboardingAuthRequired: (cb: (payload: { id: string; twitter: { needed: boolean; ok: boolean; username?: string; name?: string }; reddit: { needed: boolean; ok: boolean; username?: string; name?: string }; canSkipTwitter?: boolean; canSkipReddit?: boolean; canProceedPartial?: boolean }) => void) =>
-    ipcRenderer.on('onboarding:authRequired', (_e, payload) => cb(payload)),
+    subscribe('onboarding:authRequired', cb),
 
   chatSend: (messages: any[], options?: { model?: string; effort?: string }, sessionId?: number) => ipcRenderer.invoke('chat:send', messages, options, sessionId),
   chatInject: (payload: any, sessionId?: number) => ipcRenderer.invoke('chat:inject', payload, sessionId),
   chatStop: (sessionId?: number) => ipcRenderer.invoke('chat:stop', sessionId),
   onChatQuestion: (cb: (q: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }) => void) =>
-    ipcRenderer.on('chat:question', (_e, q) => cb(q)),
+    subscribe('chat:question', cb),
   sendChatAnswer: (id: string, answer: string | string[]) => ipcRenderer.send('chat:answer', { id, answer }),
   createSession: () => ipcRenderer.invoke('chat:createSession'),
   getSessions: () => ipcRenderer.invoke('chat:getSessions'),
