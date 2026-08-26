@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { getDb, getProfile, queryAll, insertRow, updateProfile, getSocialContent, countSocialContent } from './db'
 import { runCli, runTwitterCli, ensureRdtAuth, ensureTwitterAuth } from './cli'
 import { logger } from './log'
+import { PuterAuthCancelledError } from './puter-auth'
 import {
   fetchTwitterUserPosts,
   fetchTwitterReplies,
@@ -635,20 +636,25 @@ export function createTools(opts?: {
     },
 
     generate_image: {
-      description: 'Generate an image with Google AI Studio Gemini image generation by default, falling back to Puter.js if Gemini fails. Call read_image_guide first for the full prompting guide, then call read_profile for brand colors before building prompt. Use the 5-part prompting framework.',
+      description: 'Generate an image with Google AI Studio Gemini image generation by default, falling back to Puter.js if Gemini fails (this may open a Puter sign-in window for the user). Call read_image_guide first for the full prompting guide, then call read_profile for brand colors before building prompt. Use the 5-part prompting framework.',
       parameters: z.object({
         prompt: z.string().describe('Full image prompt. Include text for quotes, labels, headlines, hook cards, or branding when needed. Specify font style, color, size, and placement. End with constraints: "No watermarks, no logos, no AI artifacts."'),
         filename: z.string().describe('Output filename with .png extension, e.g. twitter_hook_2026-06-23.png'),
-        model: z.enum(['gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-2']).optional().describe('Fallback Puter.js image model if Gemini image generation fails.')
+        model: z.enum(['gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-2']).optional().describe('Puter.js image model used for the fallback attempt when Gemini image generation fails.')
       }),
-      execute: async ({ prompt, filename }) => {
+      execute: async ({ prompt, filename, model }) => {
         let safeFilename = filename && filename.trim() ? filename.trim() : `generated_${Date.now()}.png`
         if (!safeFilename.endsWith('.png')) safeFilename += '.png'
         try {
           const { generateImage } = await import('./puter')
-          const path = await generateImage(prompt, safeFilename)
-          return { success: true, path, filename: safeFilename, message: `Image saved to ${path}` }
+          const { path, backend } = await generateImage(prompt, safeFilename, model)
+          const via = backend === 'gemini' ? 'Gemini' : `Puter.js (${model || 'gpt-image-2'})`
+          return { success: true, path, filename: safeFilename, backend, message: `Image generated with ${via} · saved to ${path}` }
         } catch (e: any) {
+          if (e instanceof PuterAuthCancelledError) {
+            // Cancelled-only envelope; other errors stay retryable.
+            return { success: false, cancelled: true, error: 'Image could not be generated: the Puter sign-in was dismissed or did not complete. Do not retry automatically — tell the user you cannot generate images until they finish signing in to Puter.' }
+          }
           return { error: e.message }
         }
       }

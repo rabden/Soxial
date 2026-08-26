@@ -1,15 +1,14 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Check, Sparkles, ArrowRight, ArrowLeft, ChevronDown, RefreshCw, ShieldAlert, Search as SearchIcon, Globe as GlobeIcon, Image as ImageIcon, AtSign, List, Eye, Send, CornerUpLeft, Newspaper, Heart, Repeat2, Bookmark, UserPlus, Info, Layers, BookOpen, MessageCircle, BadgeCheck, Flame, ThumbsUp, Database, Lightbulb, ShieldCheck, Gauge, Crosshair, SquarePen, RotateCcw, CalendarClock, Save, Download, Briefcase, Users, Package, Target, FileText, Trash2, TrendingUp, MessageSquare, Plus, KeyRound } from 'lucide-react'
+import { Check, ArrowRight, ArrowLeft, ChevronDown, RefreshCw, ShieldAlert, Search as SearchIcon, Heart, Lightbulb, Briefcase, Users, Package, Trash2, Plus, KeyRound } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Message, MessageContent } from 'src/components/ai-elements/message'
-import { ChainOfThoughtStep } from 'src/components/ai-elements/chain-of-thought'
 import {
   Conversation, ConversationContent, ConversationScrollButton
 } from 'src/components/ai-elements/conversation'
 import { RichContent } from 'src/components/rich-content'
-import { Reasoning, ReasoningTrigger, ReasoningContent } from 'src/components/ai-elements/reasoning'
+import { MessageSegments } from '../chat/message-segments'
 import { QuestionInput, QuestionData } from 'src/components/ui/question-input'
 import { StrategyReview } from './StrategyReview'
 import type { OnboardingEvent } from 'src/types/onboarding-events'
@@ -38,7 +37,6 @@ import {
   DropdownMenuTrigger,
 } from 'src/components/ui/dropdown'
 import { cn } from 'src/lib/utils'
-import { getToolLabel, getToolCallDescription } from 'src/lib/tool-labels'
 import { useOnboardingForm } from 'src/features/onboarding/use-onboarding-form'
 import type { AppError } from 'src/types/app-error'
 
@@ -133,7 +131,7 @@ export default function Onboarding({ onComplete }: { onComplete: (sessionId?: nu
   }
 
   return (
-    <div className="flex h-full min-h-screen bg-[#050507]">
+    <div className={`flex h-full bg-[#050507] ${step === 4 ? '' : 'min-h-screen'}`}>
       <BackgroundGlow />
 
       <div className={`flex-1 flex flex-col ${step === 4 ? 'overflow-hidden' : 'overflow-y-auto'}`}>
@@ -863,34 +861,6 @@ interface ChatMessage {
   steps?: StepItem[]
 }
 
-const toolIcons: Record<string, any> = {
-  connect_twitter: Sparkles, connect_reddit: Sparkles,
-  twitter_search: SearchIcon, twitter_user: AtSign, twitter_user_posts: List,
-  twitter_status: BadgeCheck, twitter_whoami: BadgeCheck,
-  twitter_followers: Users, twitter_following: Users, twitter_likes: Heart,
-  twitter_article: FileText, twitter_list: List, twitter_delete: RotateCcw,
-  twitter_tweet: Eye, twitter_post: Send, twitter_reply: CornerUpLeft, twitter_quote: Send,
-  twitter_feed: Newspaper, twitter_like: Heart, twitter_retweet: Repeat2, twitter_bookmark: Bookmark, twitter_bookmarks: Bookmark,
-  twitter_follow: UserPlus, twitter_replies: CornerUpLeft,
-  reddit_search: SearchIcon, reddit_sub: Layers, reddit_sub_info: Info, reddit_read: BookOpen,
-  reddit_user: AtSign, reddit_user_posts: List, reddit_user_comments: MessageCircle,
-  reddit_login: BadgeCheck, reddit_whoami: BadgeCheck, reddit_feed: Newspaper, reddit_popular: Flame,
-  reddit_all: GlobeIcon, reddit_saved: Bookmark, reddit_upvoted: ThumbsUp,
-  reddit_comment: Send, reddit_upvote: ThumbsUp, reddit_save: Bookmark, reddit_subscribe: UserPlus,
-  read_profile: AtSign, read_hooks: Lightbulb, read_voice_rules: MessageCircle,
-  read_pillars: Layers, read_algorithm: Gauge, read_targets: Crosshair,
-  read_replies: CornerUpLeft, read_social_content: Database, read_memory: Database,
-  save_hook: Lightbulb, save_voice_rule: ShieldCheck, save_pillar: Save,
-  save_algorithm_rule: Gauge, save_target: Crosshair, save_reply: CornerUpLeft,
-  save_memory: Database, update_soxial_profile: SquarePen, reset_strategy_defaults: RotateCcw,
-  delete_voice_rules: Trash2, delete_hooks: Trash2, delete_pillars: Trash2,
-  delete_targets: Trash2, delete_algorithm_rules: Trash2, save_milestone: TrendingUp,
-  generate_image: ImageIcon, schedule_post: CalendarClock, get_scheduled_posts: CalendarClock,
-}
-function getToolIcon(name: string) {
-  return toolIcons[name] || GlobeIcon
-}
-
 function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onComplete: (sessionId?: number) => void; onBack: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [steps, setSteps] = useState<StepItem[]>([])
@@ -1319,54 +1289,6 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
 
   const hasActivity = steps.length > 0
   const allToolsDone = steps.length > 0 && steps.every(s => s.type === 'tool' ? s.status === 'complete' : true)
-  const hasNextAction = complete && messages.some(m => m.role === 'assistant' && m.content.includes('"nxan"'))
-
-  const renderStep = (step: StepItem, key: number, isStreaming = false) => {
-    const description =
-      step.type === 'tool'
-        ? getToolCallDescription(step.name, step.status, step.args)
-        : undefined
-
-    if (step.type === 'reasoning') {
-      return (
-        <Reasoning key={key} isStreaming={isStreaming} defaultOpen={true}>
-          <ReasoningTrigger />
-          <ReasoningContent>{step.text}</ReasoningContent>
-        </Reasoning>
-      )
-    }
-
-    if (step.type === 'tool') {
-      return (
-        <ChainOfThoughtStep
-          key={key}
-          icon={getToolIcon(step.name)}
-          label={getToolLabel(step.name)}
-          description={description}
-          status={step.status === 'calling' ? 'active' : 'complete'}
-        />
-      )
-    }
-
-    if (step.type === 'text') {
-      return (
-        <RichContent key={key} isAnimating={isStreaming}>
-          {step.text}
-        </RichContent>
-      )
-    }
-
-    return (
-      <ChainOfThoughtStep
-        key={key}
-        icon={MessageSquare}
-        label={step.status === 'answered'
-          ? `${step.text} → ${Array.isArray(step.answer) ? step.answer.join(', ') : step.answer}`
-          : step.text}
-        status={step.status === 'answered' ? 'complete' : 'active'}
-      />
-    )
-  }
 
   return (
     <>
@@ -1377,13 +1299,7 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
               <MessageContent>
                 {msg.steps?.length ? (
                   <div className="flex flex-col gap-1.5 mb-2">
-                    {msg.steps.map((step, si) => {
-                      const hide =
-                        (step.type === 'reasoning' || step.type === 'tool') &&
-                        msg.steps!.some((s, idx) => idx > si && s.type === 'text')
-                      if (hide) return null
-                      return renderStep(step, si)
-                    })}
+                    <MessageSegments steps={msg.steps} />
                   </div>
                 ) : null}
                 {(!msg.steps || !msg.steps.some((s) => s.type === 'text')) && msg.content && (
@@ -1398,13 +1314,7 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
               <MessageContent>
                 {(hasActivity || transientRetry) ? (
                   <div className="flex flex-col gap-1.5 mb-2">
-                    {steps.map((step, si) => {
-                      const hide =
-                        (step.type === 'reasoning' || step.type === 'tool') &&
-                        steps.some((s, idx) => idx > si && s.type === 'text')
-                      if (hide) return null
-                      return renderStep(step, si, si === steps.length - 1 && streaming)
-                    })}
+                    <MessageSegments steps={steps} working />
                     {transientRetry && (
                       <TransientRetryStep
                         key={transientRetry.attempt}
@@ -1560,60 +1470,34 @@ function StepAiOnboarding({ formData, onComplete, onBack }: { formData: any; onC
               </div>
             )
           ) : complete ? (
-            hasNextAction ? (
-              <div className="flex items-center gap-3 pointer-events-auto animate-in fade-in zoom-in-95 duration-500">
-                <Button
-                  variant="ghost"
-                  size="lg"
-                  shape="round"
-                  scaleOnPress
-                  depthShadow
-                  onClick={() => onComplete()}
-                >
-                  Skip to Dashboard
-                </Button>
-                <Button
-                  variant="default"
-                  size="lg"
-                  shape="round"
-                  scaleOnPress
-                  depthShadow
-                  onClick={async () => {
-                    try {
-                      const stripped = messages
-                        .filter(m => m.content.trim())
-                        .map(m => ({ role: m.role, content: m.content }))
-                      const sessionId = await window.api.saveOnboardingConversation(stripped)
-                      onComplete(sessionId)
-                    } catch {
-                      onComplete()
-                    }
-                  }}
-                >
-                  <span>Review Next Action</span>
-                  <ArrowRight className="size-3 stroke-[2.5]" />
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant="default"
-                size="lg"
-                shape="round"
-                scaleOnPress
-                depthShadow
-                onClick={() => onComplete()}
-                className="pointer-events-auto animate-in fade-in zoom-in-95 duration-500"
-              >
-                <span>Continue to Dashboard</span>
-                <ArrowRight className="size-3 stroke-[2.5]" />
-              </Button>
-            )
+            <Button
+              variant="default"
+              size="lg"
+              shape="round"
+              scaleOnPress
+              depthShadow
+              onClick={async () => {
+                try {
+                  const stripped = messages
+                    .filter(m => m.content.trim())
+                    .map(m => ({ role: m.role, content: m.content }))
+                  const sessionId = await window.api.saveOnboardingConversation(stripped)
+                  onComplete(sessionId)
+                } catch {
+                  onComplete()
+                }
+              }}
+              className="pointer-events-auto animate-in fade-in zoom-in-95 duration-500"
+            >
+              <span>Continue</span>
+              <ArrowRight className="size-3 stroke-[2.5]" />
+            </Button>
           ) : pendingQuestions ? (
             <QuestionInput questions={pendingQuestions} onSubmit={handleAllAnswers} />
           ) : null}
 
           {review && (
-            <div className="pointer-events-auto w-full max-w-3xl mx-auto">
+            <div className="pointer-events-auto w-full max-w-3xl mx-auto max-h-[65vh] overflow-y-auto">
               <StrategyReview
                 runId={review.runId}
                 initialVersion={review.version}

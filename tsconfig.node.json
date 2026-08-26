@@ -10,5 +10,5 @@
       "@main/*": ["./electron/main/*"]
     }
   },
-  "include": ["electron/**/*.ts", "src/types/app-error.ts", "src/types/onboarding-events.ts"]
+  "include": ["electron/**/*.ts", "src/types/app-error.ts", "src/types/onboarding-events.ts", "src/types/puter-auth-events.ts"]
 }

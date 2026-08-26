@@ -1,9 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Message, MessageContent } from "src/components/ai-elements/message";
 import {
-  ChainOfThoughtStep,
-} from "src/components/ai-elements/chain-of-thought";
-import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
@@ -13,59 +10,15 @@ import { RichContent } from "src/components/rich-content";
 import { TransientRetryStep } from "src/components/ui/transient-retry-step";
 import { OperationalError } from "src/components/ui/operational-error";
 import { PromptInput } from "src/components/ui/prompt-input";
-import { getToolLabel, getToolCallDescription } from "src/lib/tool-labels";
 import { PostAttachments } from "src/components/ui/post-attachment";
-import {
-  SearchIcon,
-  GlobeIcon,
-  FileTextIcon,
-  ImageIcon,
-  MessageSquare,
-  PanelLeft,
-  AtSign,
-  List,
-  Eye,
-  Send,
-  CornerUpLeft,
-  Quote,
-  Newspaper,
-  Heart,
-  Repeat2,
-  Bookmark,
-  UserPlus,
-  Info,
-  Layers,
-  BookOpen,
-  MessageCircle,
-  BadgeCheck,
-  Flame,
-  ThumbsUp,
-  Database,
-  Lightbulb,
-  ShieldCheck,
-  Gauge,
-  Crosshair,
-  SquarePen,
-  RotateCcw,
-  CalendarClock,
-  Save,
-  Download,
-  Users,
-  Trash2,
-  TrendingUp,
-  Sparkles,
-} from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import { AppLogo } from "src/components/ui/app-logo";
-import {
-  Reasoning,
-  ReasoningTrigger,
-  ReasoningContent,
-} from "src/components/ai-elements/reasoning";
-import Sidebar, { View } from "src/components/Sidebar";
+import Sidebar, { View, SettingsSection } from "src/components/Sidebar";
 import ScheduledPosts from "src/components/ScheduledPosts";
 import ProfileView from "src/components/Profile";
 import { fileToAttachment, type ChatAttachment } from "src/features/chat/attachments";
-import { buildApiMessages } from "src/features/chat/messages";
+import { buildApiMessages, parseSteps } from "src/features/chat/messages";
+import { MessageSegments } from "src/features/chat/message-segments";
 import { createSessionState, type ApiMessage, type ChatMessage, type SessionState, type StepItem } from "src/features/chat/types";
 import type { AppError } from "src/types/app-error";
 
@@ -74,86 +27,6 @@ interface ChatSession {
   title: string;
   msg_count: number;
   updated_at: string;
-}
-
-const toolIcons: Record<string, any> = {
-  // Twitter
-  twitter_search: SearchIcon,
-  twitter_user: AtSign,
-  twitter_user_posts: List,
-  twitter_replies: CornerUpLeft,
-  twitter_status: BadgeCheck,
-  twitter_whoami: BadgeCheck,
-  twitter_followers: Users,
-  twitter_following: Users,
-  twitter_likes: Heart,
-  twitter_article: FileTextIcon,
-  twitter_list: List,
-  twitter_delete: RotateCcw,
-  twitter_tweet: Eye,
-  twitter_post: Send,
-  twitter_reply: CornerUpLeft,
-  twitter_quote: Quote,
-  twitter_feed: Newspaper,
-  twitter_like: Heart,
-  twitter_retweet: Repeat2,
-  twitter_bookmark: Bookmark,
-  twitter_follow: UserPlus,
-  connect_twitter: Sparkles,
-  connect_reddit: Sparkles,
-  reddit_search: SearchIcon,
-  reddit_sub: Layers,
-  reddit_sub_info: Info,
-  reddit_read: BookOpen,
-  reddit_user: AtSign,
-  reddit_user_posts: List,
-  reddit_user_comments: MessageCircle,
-  reddit_login: BadgeCheck,
-  reddit_whoami: BadgeCheck,
-  reddit_feed: Newspaper,
-  reddit_popular: Flame,
-  reddit_all: GlobeIcon,
-  reddit_saved: Bookmark,
-  reddit_upvoted: ThumbsUp,
-  reddit_comment: Send,
-  reddit_upvote: ThumbsUp,
-  reddit_save: Bookmark,
-  reddit_subscribe: UserPlus,
-  // Strategy reads
-  read_profile: AtSign,
-  read_hooks: Lightbulb,
-  read_voice_rules: MessageCircle,
-  read_pillars: Layers,
-  read_algorithm: Gauge,
-  read_targets: Crosshair,
-  read_replies: CornerUpLeft,
-  read_social_content: Database,
-  read_memory: Database,
-  // Strategy saves
-  save_hook: Lightbulb,
-  save_voice_rule: ShieldCheck,
-  save_pillar: Save,
-  save_algorithm_rule: Gauge,
-  save_target: Crosshair,
-  save_reply: CornerUpLeft,
-  save_memory: Database,
-  update_soxial_profile: SquarePen,
-  reset_strategy_defaults: RotateCcw,
-  delete_voice_rules: Trash2,
-  delete_hooks: Trash2,
-  delete_pillars: Trash2,
-  delete_targets: Trash2,
-  delete_algorithm_rules: Trash2,
-  save_milestone: TrendingUp,
-  twitter_bookmarks: Bookmark,
-  // Other
-  inspect_image_url: ImageIcon,
-  generate_image: ImageIcon,
-  schedule_post: CalendarClock,
-  get_scheduled_posts: CalendarClock,
-};
-function getToolIcon(name: string) {
-  return toolIcons[name] || GlobeIcon;
 }
 
 function MainScreen({
@@ -223,6 +96,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
   const fetchedQuickActions = useRef(false);
   const quickActionsRequestRef = useRef(0);
   const [view, setView] = useState<View>("chat");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [profile, setProfile] = useState<any>(null);
   const [scheduledCount, setScheduledCount] = useState(0);
   const [profileRebuilding, setProfileRebuilding] = useState(false);
@@ -317,6 +191,22 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       })
       .filter(Boolean) as ChatAttachment[];
     return attachments.length > 0 ? attachments : undefined;
+  }
+
+  // Expanded body for image-producing tool pills: attachment previews.
+  function renderToolAttachments(step: Extract<StepItem, { type: "tool" }>) {
+    const attachments =
+      step.status === "complete" ? resultToAttachments(step.result) : undefined;
+    if (!attachments?.length) return null;
+    return (
+      <PostAttachments
+        attachments={attachments.map((att) => ({
+          type: "image" as const,
+          url: att.dataUrl,
+          alt: att.name,
+        }))}
+      />
+    );
   }
 
   useEffect(() => {
@@ -430,57 +320,19 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     if (requestId === quickActionsRequestRef.current) setQuickActions(r.suggestions);
   }
 
-  function parseSteps(
-    reasoningRaw: string | null | undefined,
-    toolCallsRaw: string | null | undefined,
-  ): StepItem[] | undefined {
-    if (!reasoningRaw && !toolCallsRaw) return undefined;
-    const parsed: StepItem[] = [];
-    if (reasoningRaw) {
-      try {
-        const r = JSON.parse(reasoningRaw);
-        if (Array.isArray(r)) {
-          if (r.length > 0 && r[0].type) {
-            return r as StepItem[];
-          }
-          for (const seg of r) {
-            parsed.push({ type: "reasoning", text: seg.text || seg });
-          }
-        }
-      } catch {
-        parsed.push({ type: "reasoning", text: reasoningRaw });
-      }
-    }
-    if (toolCallsRaw) {
-      try {
-        const tc = JSON.parse(toolCallsRaw);
-        if (Array.isArray(tc)) {
-          for (const t of tc) {
-            parsed.push({
-              type: "tool",
-              id: t.id,
-              name: t.name,
-              args: t.args,
-              result: t.result,
-              status: "complete",
-            });
-          }
-        }
-      } catch {}
-    }
-    return parsed.length > 0 ? parsed : undefined;
-  }
-
   async function selectSession(id: number) {
     setView("chat");
     setCurrentSessionId(id);
     const msgs = await window.api.getMessages(id);
-    const parsed = msgs.map((m: any) => ({
-      role: m.role,
-      content: m.content || "",
-      steps: parseSteps(m.reasoning, m.tool_calls_json),
-      attachments: parseAttachments(m.attachments_json),
-    }));
+    const parsed = msgs.map((m: any) => {
+      const info = parseSteps(m.reasoning, m.tool_calls_json);
+      return {
+        role: m.role,
+        content: m.content || "",
+        steps: info,
+        attachments: parseAttachments(m.attachments_json),
+      };
+    });
     
     setSessionStates((prev) => {
       const current = prev[id] || {
@@ -1059,7 +911,9 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     // Read latest values from REFS (always current — sessionStates closure is stale)
     const finalContent = result.fullText || streamTextRefs.current[sid] || "";
     const completedSteps = stepsRefs.current[sid] || [];
-    const stepsJson = completedSteps.length > 0 ? JSON.stringify(completedSteps) : undefined;
+    const stepsJson = completedSteps.length > 0
+      ? JSON.stringify({ version: 2, steps: completedSteps })
+      : undefined;
 
     // Side effects OUTSIDE updater (StrictMode invokes updaters twice → double DB inserts)
     void window.api.addMessage(sid, "assistant", finalContent, stepsJson, undefined);
@@ -1151,12 +1005,18 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
           profile={profile}
           scheduledCount={scheduledCount}
           disabled={profileRebuilding}
+          settingsSection={settingsSection}
           sessionStates={sessionStates}
           onNewChat={() => { if (!profileRebuilding) newChat(); }}
           onSelectSession={(id) => { if (!profileRebuilding) selectSession(id); }}
           onDeleteSession={(id) => { if (!profileRebuilding) deleteSession(id); }}
-          onNavigate={(nextView) => { if (!profileRebuilding) setView(nextView); }}
+          onNavigate={(nextView) => {
+            if (profileRebuilding) return;
+            if (nextView === "profile" && view !== "profile") setSettingsSection("account");
+            setView(nextView);
+          }}
           onToggleSidebar={() => { if (!profileRebuilding) setSidebarOpen(false); }}
+          onSelectSettings={setSettingsSection}
         />
       )}
 
@@ -1175,6 +1035,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
         ) : view === "profile" ? (
           <ProfileView
             profile={profile}
+            section={settingsSection}
             onSaved={() => {
               window.api.getProfile().then(setProfile);
               loadApiInfo();
@@ -1228,53 +1089,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                             ) : null}
                             {msg.steps?.length ? (
                               <div className="flex flex-col gap-1.5 mb-2">
-                                {msg.steps.map((step, si) => {
-                                  const hide = (step.type === "reasoning" || step.type === "tool") && 
-                                    msg.steps!.some((s, idx) => idx > si && s.type === "text");
-                                  if (hide) return null;
-                                  
-                                  return step.type === "reasoning" ? (
-                                    <Reasoning key={si} defaultOpen={true}>
-                                      <ReasoningTrigger />
-                                      <ReasoningContent>
-                                        {step.text}
-                                      </ReasoningContent>
-                                    </Reasoning>
-                                  ) : step.type === "tool" ? (
-                                    <div key={si} className="space-y-2">
-                                      <ChainOfThoughtStep
-                                        icon={getToolIcon(step.name)}
-                                        label={getToolLabel(step.name)}
-                                        status="complete"
-                                      />
-                                      {step.status === "complete" &&
-                                      resultToAttachments(step.result)?.length ? (
-                                        <PostAttachments
-                                          attachments={resultToAttachments(step.result)!.map(
-                                            (att) => ({
-                                              type: "image",
-                                              url: att.dataUrl,
-                                              alt: att.name,
-                                            }),
-                                          )}
-                                        />
-                                      ) : null}
-                                    </div>
-                                  ) : step.type === "text" ? (
-                                    <RichContent key={si} onCardAction={handleCardAction}>
-                                      {step.text}
-                                    </RichContent>
-                                  ) : step.type === "question" ? (
-                                    <ChainOfThoughtStep
-                                      key={si}
-                                      icon={step.status === "answered" ? MessageSquare : MessageSquare}
-                                      label={step.status === "answered"
-                                        ? `${step.text} → ${Array.isArray(step.answer) ? step.answer.join(", ") : step.answer}`
-                                        : step.text}
-                                      status={step.status === "answered" ? "complete" : "active"}
-                                    />
-                                  ) : null;
-                                })}
+                                <MessageSegments steps={msg.steps} onCardAction={handleCardAction} renderToolBody={renderToolAttachments} />
                               </div>
                             ) : null}
                             {(!msg.steps || !msg.steps.some((s) => s.type === "text")) && msg.content && (
@@ -1300,74 +1115,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                           <MessageContent>
                             {(hasActivity || transientRetry) ? (
                               <div className="flex flex-col gap-1.5 mb-2">
-                                {steps.map((step, si) => {
-                                  const hide = (step.type === "reasoning" || step.type === "tool") && 
-                                    steps.some((s, idx) => idx > si && s.type === "text");
-                                  if (hide) return null;
-
-                                  return step.type === "reasoning" ? (
-                                    <Reasoning
-                                      key={si}
-                                      isStreaming={
-                                        si === steps.length - 1 && streaming
-                                      }
-                                      defaultOpen={true}
-                                    >
-                                      <ReasoningTrigger />
-                                      <ReasoningContent>
-                                        {step.text}
-                                      </ReasoningContent>
-                                    </Reasoning>
-                                  ) : step.type === "tool" ? (
-                                    <div key={si} className="space-y-2">
-                                      <ChainOfThoughtStep
-                                        icon={getToolIcon(step.name)}
-                                        label={getToolLabel(step.name)}
-                                        description={
-                                          getToolCallDescription(
-                                            step.name,
-                                            step.status,
-                                            step.args,
-                                          )
-                                        }
-                                        status={
-                                          step.status === "calling"
-                                            ? "active"
-                                            : "complete"
-                                        }
-                                      />
-                                      {step.status === "complete" &&
-                                      resultToAttachments(step.result)?.length ? (
-                                        <PostAttachments
-                                          attachments={resultToAttachments(step.result)!.map(
-                                            (att) => ({
-                                              type: "image",
-                                              url: att.dataUrl,
-                                              alt: att.name,
-                                            }),
-                                          )}
-                                        />
-                                      ) : null}
-                                    </div>
-                                  ) : step.type === "text" ? (
-                                    <RichContent
-                                      key={si}
-                                      isAnimating={si === steps.length - 1 && streaming}
-                                      onCardAction={handleCardAction}
-                                    >
-                                      {step.text}
-                                    </RichContent>
-                                  ) : step.type === "question" ? (
-                                    <ChainOfThoughtStep
-                                      key={si}
-                                      icon={MessageSquare}
-                                      label={step.status === "answered"
-                                        ? `${step.text} → ${Array.isArray(step.answer) ? step.answer.join(", ") : step.answer}`
-                                        : step.text}
-                                      status={step.status === "answered" ? "complete" : "active"}
-                                    />
-                                  ) : null;
-                                })}
+                                <MessageSegments steps={steps} working onCardAction={handleCardAction} renderToolBody={renderToolAttachments} />
                                 {transientRetry && (
                                   <TransientRetryStep
                                     key={transientRetry.attempt}

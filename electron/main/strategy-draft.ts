@@ -291,6 +291,17 @@ export function getDraftRow(db: Database.Database, runId: string): StrategyDraft
   return row ?? null
 }
 
+export function getLatestStrategyRunId(db: Database.Database): string | null {
+  const row = db.prepare(`
+    SELECT run_id
+    FROM onboarding_strategy_drafts
+    WHERE status = 'committed'
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `).get() as { run_id: string } | undefined
+  return row?.run_id ?? null
+}
+
 export function parseDraftDocument(row: StrategyDraftRow): StrategyDraftDocument {
   const parsed = JSON.parse(row.draft_json) as StrategyDraftDocument
   if (parsed?.version !== STRATEGY_DRAFT_DOC_VERSION) {

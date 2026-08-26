@@ -41,16 +41,16 @@ async function testZhipuApiKeyTier(apiKey: string, baseURL: string): Promise<'fr
     const { createZhipu } = await import('zhipu-ai-provider')
     const zhipu = createZhipu({ baseURL, apiKey })
 
-    // Probe via glm-5.2 (Pro tier only)
+    // Probe via glm-5.3 (Pro tier only)
     await generateText({
-      model: zhipu('glm-5.2'),
+      model: zhipu('glm-5.3'),
       prompt: 'Respond with just "OK"',
       maxOutputTokens: 2,
       maxRetries: 0,
     })
     return 'pro'
   } catch (error: any) {
-    // 429 / quota / permission denied for glm-5.2 → classify as 'free'
+    // 429 / quota / permission denied for glm-5.3 → classify as 'free'
     logger.info('api-tier', `Zhipu tier probe failed: ${(error?.message || '').substring(0, 120)}`)
     return 'free'
   }

@@ -93,7 +93,7 @@ Silent background check to determine if the user's API key is `free` or `pro` ti
 The gathered data is packed into a single massive user message and fed to `runAgent()` (see `electron/main/agent.ts`) with:
 
 - **60 max steps** (generous tool-calling budget)
-- **Onboarding-specific fallback chain**: `gemini-3.6-flash → glm-4.7-flash → gemini-3.5-flash-lite`
+- **Onboarding-specific fallback chain**: `gemini-3.7-flash → glm-4.7-flash → gemini-3.5-flash-lite`
 - **Custom tool set** (`createOnboardingTools()` in `electron/main/agent.ts`) = all regular tools + `ask_user_questions`
 
 The AI agent then:

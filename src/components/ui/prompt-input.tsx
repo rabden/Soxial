@@ -9,13 +9,16 @@ const SMOOTH =
   "max-width 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), height 0.15s ease-out";
 
 const MODEL_DISPLAY: Record<string, string> = {
-  "gemini-3.6-flash": "Gemini 3.6 Flash",
+  "gemini-3.7-flash": "Gemini 3.7 Flash",
   "gemini-3.1-pro": "Gemini 3.1 Pro",
   "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite",
-  "glm-5.2": "GLM 5.2",
+  "glm-5.3": "GLM 5.3",
   "glm-5-turbo": "GLM 5 Turbo",
   "glm-4.7-flash": "GLM 4.7 Flash",
   "glm-4.5-flash": "GLM 4.5 Flash",
+  // Main normalizes at every boundary; these exist only for stale payloads.
+  "gemini-3.6-flash": "Gemini 3.6 Flash",
+  "glm-5.2": "GLM 5.2",
 };
 const modelLabel = (id: string) => MODEL_DISPLAY[id] || id;
 

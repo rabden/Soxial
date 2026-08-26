@@ -1,10 +1,11 @@
 import { GoogleGenAI } from '@google/genai'
-import { init, getAuthToken } from '@heyputer/puter.js/src/init.cjs'
+import { init } from '@heyputer/puter.js/src/init.cjs'
 import { getProfile, updateProfile } from './db'
 import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
 import { app } from 'electron'
 import { logger } from './log'
+import { interactivePuterSignIn, PuterAuthCancelledError } from './puter-auth'
 
 let puterClient: any = null
 
@@ -29,18 +30,20 @@ export function resetPuterClient() {
   puterClient = null
 }
 
-/** Open browser-based Puter sign-in, store token in profile. */
-export async function puterSignIn(): Promise<{ success: boolean; error?: string }> {
+/** Open the interactive in-app Puter sign-in and store the token. Rejects with
+ *  PuterAuthCancelledError when dismissed/closed/timed out; other errors propagate as-is. */
+export async function puterSignIn(): Promise<void> {
   try {
-    const token = await getAuthToken()
-    if (!token) return { success: false, error: 'No token received from Puter' }
+    const token = await interactivePuterSignIn()
+    if (!token) throw new Error('No token received from Puter')
     updateProfile({ puter_token: token })
     puterClient = init(token)
     logger.info('puter', 'signed in successfully')
-    return { success: true }
   } catch (e: any) {
-    logger.error('puter', 'sign-in failed', e.message)
-    return { success: false, error: e.message }
+    // Failure logged on all paths, cancelled included.
+    const cancelled = e instanceof PuterAuthCancelledError
+    logger.error('puter', `sign-in failed${cancelled ? ' (cancelled)' : ''}`, e.message)
+    throw e
   }
 }
 
@@ -58,7 +61,7 @@ async function generateGeminiImage(prompt: string, filename: string): Promise<st
   logger.info('gemini-image', `generating: "${prompt.slice(0, 80)}" -> ${filename}`)
 
   const interaction = await ai.interactions.create({
-    model: 'gemini-3.5-flash-lite-image',
+    model: 'gemini-3.1-flash-lite-image',
     store: false,
     input: [{ type: 'user_input', content: [{ type: 'text', text: prompt }] }],
   } as any)
@@ -99,8 +102,7 @@ async function generatePuterImage(prompt: string, filename: string, model?: stri
     client = getPuterClient()
   } catch {
     logger.info('puter', 'no stored auth found, starting sign-in before image generation')
-    const auth = await puterSignIn()
-    if (!auth.success) throw new Error(auth.error || 'Not signed in to Puter')
+    await puterSignIn() // PuterAuthCancelledError propagates naturally
     client = getPuterClient()
   }
 
@@ -131,12 +133,16 @@ async function generatePuterImage(prompt: string, filename: string, model?: stri
   return path
 }
 
+export type GeneratedImage = { path: string; backend: 'gemini' | 'puter' }
+
 /** Generate an image with Gemini by default, falling back to Puter.js if Gemini fails. */
-export async function generateImage(prompt: string, filename: string, _mainWindow?: any, model?: string): Promise<string> {
+export async function generateImage(prompt: string, filename: string, model?: string): Promise<GeneratedImage> {
   try {
-    return await generateGeminiImage(prompt, filename)
+    const path = await generateGeminiImage(prompt, filename)
+    return { path, backend: 'gemini' }
   } catch (e: any) {
     logger.warn('gemini-image', `Gemini image failed, falling back to Puter.js: ${e.message}`)
-    return generatePuterImage(prompt, filename, model)
+    const path = await generatePuterImage(prompt, filename, model)
+    return { path, backend: 'puter' }
   }
 }

@@ -216,7 +216,7 @@ Tracks temporary rate limit (429 / quota) cooldowns per model and API key.
 | Column | Data Type | Constraints | Default | Description |
 |---|---|---|---|---|
 | `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | - | Record identifier |
-| `model` | `TEXT` | `NOT NULL` | - | Model string (e.g. `gemini-3.6-flash`) |
+| `model` | `TEXT` | `NOT NULL` | - | Model string (e.g. `gemini-3.7-flash`) |
 | `api_key_id` | `INTEGER` | `FOREIGN KEY -> api_keys(id) ON DELETE CASCADE` | `NULL` | Affected key ID (`NULL` = primary key) |
 | `exhausted_at` | `TEXT` | `NOT NULL` | - | Cooldown start timestamp |
 | `available_at` | `TEXT` | `NOT NULL` | - | Cooldown end timestamp (default +5 hrs) |

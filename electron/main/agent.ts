@@ -1,6 +1,7 @@
 import { streamText, generateText as aiGenerateText, isStepCount } from 'ai'
 import { createGoogle } from '@ai-sdk/google'
 import { getProfile, getApiTier, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb } from './db'
+import { normalizeModelId, requiredTierFor } from './models'
 import { createTools } from './tools'
 import { SAFE_CAPABILITIES, filterToolsByCapability, listDeniedTools } from './tool-capabilities'
 import { PendingInteractionRegistry } from './pending-interaction'
@@ -60,25 +61,30 @@ export function getQuickActionModel(): string {
 }
 
 const MODEL_LABELS: Record<string, string> = {
-  'Gemini 3.6 Flash': 'gemini-3.6-flash',
-  'gemini-3.6-flash': 'gemini-3.6-flash',
+  // Current ids first; pre-rename labels/ids at the bottom still resolve after model bumps.
+  'Gemini 3.7 Flash': 'gemini-3.7-flash',
+  'gemini-3.7-flash': 'gemini-3.7-flash',
   'Gemini 3.1 Pro': 'gemini-3.1-pro',
   'gemini-3.1-pro': 'gemini-3.1-pro',
   'Gemini 3.5 Flash Lite': 'gemini-3.5-flash-lite',
   'gemini-3.5-flash-lite': CHAT_MODEL,
-  'GLM 5.2': 'glm-5.2',
-  'glm-5.2': 'glm-5.2',
+  'GLM 5.3': 'glm-5.3',
+  'glm-5.3': 'glm-5.3',
   'GLM 5 Turbo': 'glm-5-turbo',
   'glm-5-turbo': 'glm-5-turbo',
   'GLM 4.7 Flash': 'glm-4.7-flash',
   'glm-4.7-flash': 'glm-4.7-flash',
   'GLM 4.5 Flash': 'glm-4.5-flash',
   'glm-4.5-flash': 'glm-4.5-flash',
+
+  // Legacy names kept so stored preferences keep working; ids resolve via normalizeModelId.
+  'Gemini 3.6 Flash': 'gemini-3.6-flash',
+  'GLM 5.2': 'glm-5.2',
 }
 
-export const ONBOARDING_MODEL_FALLBACK = ['gemini-3.6-flash', 'gemini-3.5-flash-lite']
-export const CHAT_MODEL_FALLBACK_PRO = ['gemini-3.6-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite']
-export const CHAT_MODEL_FALLBACK_FREE = ['gemini-3.5-flash-lite', 'gemini-3.6-flash']
+export const ONBOARDING_MODEL_FALLBACK = ['gemini-3.7-flash', 'gemini-3.5-flash-lite']
+export const CHAT_MODEL_FALLBACK_PRO = ['gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite']
+export const CHAT_MODEL_FALLBACK_FREE = ['gemini-3.5-flash-lite', 'gemini-3.7-flash']
 
 // Dynamic onboarding fallback chain: prefers Google if present, falls back to Z.AI if only Zhipu keys exist.
 export function getOnboardingFallbackChain(): string[] {
@@ -90,11 +96,11 @@ export function getOnboardingFallbackChain(): string[] {
   const hasZhipu = zhipuKeys.count > 0
 
   if (hasGoogle && hasZhipu) {
-    return ['gemini-3.6-flash', 'glm-4.7-flash', 'glm-4.5-flash', 'gemini-3.5-flash-lite']
+    return ['gemini-3.7-flash', 'glm-4.7-flash', 'glm-4.5-flash', 'gemini-3.5-flash-lite']
   } else if (hasZhipu) {
     return ['glm-4.7-flash', 'glm-4.5-flash']
   } else {
-    return ['gemini-3.6-flash', 'gemini-3.5-flash-lite'] // Default Google only
+    return ['gemini-3.7-flash', 'gemini-3.5-flash-lite'] // Default Google only
   }
 }
 
@@ -137,8 +143,7 @@ export function getApiKey(model?: string, excludeApiKeyIds?: number[]): { apiKey
   const provider = model?.startsWith('glm') ? 'zhipu' : 'google'
 
   if (model) {
-    const isProModel = model === 'gemini-3.1-pro' || model === 'glm-5.2' || model === 'glm-5-turbo'
-    const requiredTier = isProModel ? 'pro' : undefined
+    const requiredTier = requiredTierFor(model)
     const availableKey = getAvailableApiKeyForModel(model, requiredTier, excludeApiKeyIds)
     if (availableKey) {
       updateApiKeyLastUsed(availableKey.id)
@@ -171,10 +176,10 @@ export function getAgentConfig(options?: AgentOptions): AgentConfig {
     fallbackChain = tier === 'pro' ? CHAT_MODEL_FALLBACK_PRO : CHAT_MODEL_FALLBACK_FREE
   }
 
-  let modelId = options?.model ? MODEL_LABELS[options.model] : undefined
+  let modelId = options?.model ? normalizeModelId(MODEL_LABELS[options.model] ?? '') : undefined
   if (!modelId) {
     for (const candidateModel of fallbackChain) {
-      const requiredTier = (candidateModel === 'gemini-3.1-pro' || candidateModel === 'glm-5.2' || candidateModel === 'glm-5-turbo') ? 'pro' : undefined
+      const requiredTier = requiredTierFor(candidateModel)
       if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(candidateModel, requiredTier)) {
         logger.warn('agent', `model ${candidateModel} is exhausted for all ${requiredTier || 'eligible'} API keys, trying next in chain`)
         continue
@@ -905,7 +910,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   let fallbackChain = options?.fallbackChain || (getApiTier().tier === 'pro' ? CHAT_MODEL_FALLBACK_PRO : CHAT_MODEL_FALLBACK_FREE)
   // Respect user-selected model: move it to front of fallback chain
   if (options?.model) {
-    const selectedId = MODEL_LABELS[options.model]
+    const selectedId = normalizeModelId(MODEL_LABELS[options.model] ?? '')
     if (selectedId) {
       fallbackChain = [selectedId, ...fallbackChain.filter(m => m !== selectedId)]
     }
@@ -965,7 +970,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     logger.info('agent', `attempting with model: ${currentModel} (${i + 1}/${fallbackChain.length})`)
     onModelSwitch?.(currentModel)
 
-    const requiredTier = (currentModel === 'gemini-3.1-pro' || currentModel === 'glm-5.2' || currentModel === 'glm-5-turbo') ? 'pro' : undefined
+    const requiredTier = requiredTierFor(currentModel)
     if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(currentModel, requiredTier)) {
       logger.warn('agent', `model ${currentModel} exhausted for all keys, skipping`)
       continue

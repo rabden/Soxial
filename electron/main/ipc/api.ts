@@ -20,6 +20,7 @@ import {
   verifyCredential,
 } from '../provider-verification'
 import { logger } from '../log'
+import { cancelInteractivePuterSignIn, openPuterSignInPage } from '../puter-auth'
 
 export function registerApiHandlers(): void {
   ipcMain.handle('api:getTier', () => getApiTier())
@@ -45,6 +46,8 @@ export function registerApiHandlers(): void {
   })
   ipcMain.handle('api:getModelExhaustionStatus', (_event, model: string) => getModelExhaustionStatus(model))
   ipcMain.handle('api:detectTier', (_event, force?: boolean) => detectApiTier(force))
+  ipcMain.handle('puter:authCancel', () => cancelInteractivePuterSignIn())
+  ipcMain.handle('puter:authOpen', () => openPuterSignInPage())
 
   ipcMain.handle('api:verifyCredentials', async (_event, request: ProviderVerificationRequest): Promise<CredentialVerificationReport> => {
     const payload = request && typeof request === 'object' ? request : {}

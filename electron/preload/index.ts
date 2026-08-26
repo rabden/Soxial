@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { PuterAuthEvent } from '../../src/types/puter-auth-events'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_event: Electron.IpcRendererEvent, payload: T) => cb(payload)
@@ -43,6 +44,7 @@ const api = {
   resetOnboarding: () => ipcRenderer.invoke('onboarding:reset'),
 
   // Plan 12: strategy review + commit.
+  getStrategyRunId: () => ipcRenderer.invoke('profile:getStrategyRunId'),
   getStrategyDraft: (runId: string) => ipcRenderer.invoke('onboarding:getDraft', runId),
   updateDraftSection: (runId: string, expectedVersion: number, section: string, payload: any) =>
     ipcRenderer.invoke('onboarding:updateDraftSection', runId, expectedVersion, section, payload),
@@ -78,6 +80,10 @@ const api = {
   generateQuickActions: () => ipcRenderer.invoke('chat:generateQuickActions'),
   getMedia: (filename: string) => ipcRenderer.invoke('get:media', filename),
   fetchLinkPreview: (url: string) => ipcRenderer.invoke('link:preview', url),
+  onPuterAuthEvent: (cb: (event: PuterAuthEvent) => void) =>
+    subscribe('puter:authEvent', cb),
+  puterAuthCancel: () => ipcRenderer.invoke('puter:authCancel'),
+  puterAuthOpen: () => ipcRenderer.invoke('puter:authOpen'),
   onChatChunk: (cb: (data: { text: string; sessionId: number }) => void) => {
     const listener = (_e: any, text: any) => cb(text)
     ipcRenderer.on('chat:chunk', listener)

@@ -220,12 +220,14 @@ This document provides a comprehensive catalog of all AI agent tools available i
 - **Execution Mechanism:** Node `fetch()` with custom `Referer: https://x.com/` headers for X/twimg URLs, returning base64 buffer via `toModelOutput`.
 
 #### `generate_image`
-- **Description:** Generate marketing graphics using Gemini `gemini-3.5-flash-lite-image` with fallback to Puter.js (`gpt-image-2`).
-- **Parameters:** `prompt` (`string`), `filename` (`string`), `model` (`string`, optional Puter model).
+- **Description:** Generate marketing graphics using Gemini `gemini-3.1-flash-lite-image` with fallback to Puter.js (default `gpt-image-2`, selectable via `model`).
+- **Parameters:** `prompt` (`string`), `filename` (`string`), `model` (`string`, optional — Puter.js model used for the fallback attempt).
 - **Execution Mechanism:**
-  1. Calls `GoogleGenAI.interactions.create` with `gemini-3.5-flash-lite-image`.
+  1. Calls `GoogleGenAI.interactions.create` with `gemini-3.1-flash-lite-image`.
   2. Saves generated buffer to `<userData>/media/<filename>`.
-  3. On error, falls back to `puterClient.ai.txt2img({ prompt, model })`.
+  3. On error, falls back to `puterClient.ai.txt2img({ prompt, model })`. If no Puter token is stored, an in-app sign-in window opens (official `puter.auth.signIn()` flow); the renderer shows a dismissible banner with Cancel.
+- **Result:** `{ success: true, path, filename, backend: 'gemini' | 'puter', message }` — `backend` names the engine that actually produced the image.
+- **Cancellation:** If the user dismisses/cancels the sign-in window, returns `{ success: false, cancelled: true, error }` so the agent knows it cannot generate images right now.
 
 ---
 

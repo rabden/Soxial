@@ -10,6 +10,7 @@ import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPr
 import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
 import { detectApiTier } from './api-tier'
 import { logger } from './log'
+import { initPuterAuthHost } from './puter-auth'
 import { registerIpcHandlers } from './ipc/register'
 import { createRunId, errorForRenderer } from './errors'
 import { appendAnsweredInteraction, ConnectedPlatforms, connectedPlatformsFromProfile, createOnboardingCheckpointV2, migrateOnboardingCheckpoint } from './onboarding-run'
@@ -18,7 +19,7 @@ import { OnboardingReadinessResult, RecordedGap, artifactFromTool, describeMissi
 import { REPAIR_MAX_STEPS, buildRepairPrompt, selectRepairTools } from './onboarding-repair'
 import { PendingRequestRegistry } from './onboarding-recovery'
 import { OnboardingRunRegistry } from './onboarding-registry'
-import { ReviewSection, ensureDraftForRun, getDraftRow, getMergedGrowthStrategy, openDraftForReview, parseDraftDocument, restoreOutOfScopeMutations, sanitizeProfileStrategyFields, setDraftStatus, updateDraft } from './strategy-draft'
+import { ReviewSection, ensureDraftForRun, getDraftRow, getLatestStrategyRunId, getMergedGrowthStrategy, openDraftForReview, parseDraftDocument, restoreOutOfScopeMutations, sanitizeProfileStrategyFields, setDraftStatus, updateDraft } from './strategy-draft'
 import { commitOnboardingStrategy, shouldTakePreCommitBackup } from './strategy-commit'
 import {
   canManuallyRetryEnrichment,
@@ -41,6 +42,9 @@ type Message = { role: string; content: string | null; parts?: any[]; tool_call_
 // Fedora 44 / Wayland fixes — must be before app.whenReady
 app.commandLine.appendSwitch('no-sandbox')
 app.commandLine.appendSwitch('enable-features', 'WaylandWindowDecorations')
+// Chromium's /dev/shm shared-memory allocation intermittently fails here
+// (ESRCH), leaving secondary windows with wedged renderers — use /tmp.
+app.commandLine.appendSwitch('disable-dev-shm-usage')
 if (!app.isPackaged) {
   app.commandLine.appendSwitch('remote-debugging-port', '9229')
   app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
@@ -956,6 +960,8 @@ function setupIpc() {
   logger.info('main', 'registering IPC handlers')
   installAuthRetryListener()
 
+  initPuterAuthHost({ getWindow: () => mainWindow })
+
   registerIpcHandlers({
     getWindow: () => mainWindow,
     isProfileRebuildActive: isTwitterHandleRebuildActive,
@@ -1029,6 +1035,12 @@ function setupIpc() {
   })
 
   // ─── Plan 12: strategy review + transactional commit ─────────────────────
+
+  // Latest committed strategy run, for reviewing the active strategy outside
+  // onboarding (profile settings).
+  ipcMain.handle('profile:getStrategyRunId', () => {
+    return { runId: getLatestStrategyRunId(getDb()) }
+  })
 
   ipcMain.handle('onboarding:getDraft', (_e, runId: string) => {
     const row = getDraftRow(getDb(), runId)

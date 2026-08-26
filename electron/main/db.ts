@@ -6,6 +6,7 @@ import { seedDatabase } from './seed'
 import { logger } from './log'
 import { credentialFingerprint, deleteCredential, getCredential, saveCredential } from './credentials'
 import { runMigrations } from './db-migrations'
+import { normalizeModelId, requiredTierFor } from './models'
 
 let db: Database.Database | null = null
 
@@ -985,9 +986,9 @@ export function getAvailableModels(tier?: string): string[] {
   if (googleKeys.count > 0) {
     const proGoogleKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'google\' AND tier = \'pro\' AND is_active = 1').get() as any
     if (proGoogleKeys.count > 0) {
-      models.push('gemini-3.6-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite')
+      models.push('gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite')
     } else {
-      models.push('gemini-3.5-flash-lite', 'gemini-3.6-flash')
+      models.push('gemini-3.5-flash-lite', 'gemini-3.7-flash')
     }
   }
 
@@ -995,12 +996,12 @@ export function getAvailableModels(tier?: string): string[] {
   const zhipuKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'zhipu\' AND is_active = 1').get() as any
   if (zhipuKeys.count > 0) {
     if (profile?.zai_coding_plan) {
-      // Coding plan: always pro tier, only supports glm-5.2 + glm-5-turbo (no flash models)
-      models.push('glm-5.2', 'glm-5-turbo')
+      // Coding plan: always pro tier, only supports glm-5.3 + glm-5-turbo (no flash models)
+      models.push('glm-5.3', 'glm-5-turbo')
     } else {
       const proZhipuKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'zhipu\' AND tier = \'pro\' AND is_active = 1').get() as any
       if (proZhipuKeys.count > 0) {
-        models.push('glm-5.2', 'glm-5-turbo', 'glm-4.7-flash', 'glm-4.5-flash')
+        models.push('glm-5.3', 'glm-5-turbo', 'glm-4.7-flash', 'glm-4.5-flash')
       } else {
         models.push('glm-4.7-flash', 'glm-4.5-flash')
       }
@@ -1012,14 +1013,16 @@ export function getAvailableModels(tier?: string): string[] {
 
 export function getDefaultModel(tier?: string): string {
   const models = getAvailableModels(tier)
-  if (models.includes('gemini-3.6-flash')) return 'gemini-3.6-flash'
+  if (models.includes('gemini-3.7-flash')) return 'gemini-3.7-flash'
   if (models.includes('glm-4.7-flash')) return 'glm-4.7-flash'
   return models[0] || 'gemini-3.5-flash-lite'
 }
 
+// Model ids saved before renames resolve onto their current equivalents (see models.ts).
 export function getSelectedModel(): string | null {
   const row = getDb().prepare('SELECT selected_model FROM user_profile WHERE id = 1').get() as any
-  return row?.selected_model || null
+  const value: string | null = row?.selected_model || null
+  return value ? normalizeModelId(value) : null
 }
 
 export function setSelectedModel(model: string): void {
@@ -1080,15 +1083,15 @@ export function getApiKeysByTier(tier: 'free' | 'pro', provider: string = 'googl
 }
 
 export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' | 'pro', excludeApiKeyIds?: number[]): { id: number; api_key: string } | null {
+  const raw = model
+  model = normalizeModelId(raw)
+  if (raw !== model) logger.warn('db', `normalized legacy model id ${raw} -> ${model}`)
   const db = getDb()
   const now = new Date().toISOString()
   const provider = model.startsWith('glm') ? 'zhipu' : 'google'
 
   // Determine required tier based on model
-  let tierFilter: string | null | undefined = requiredTier
-  if (!tierFilter) {
-    tierFilter = (model === 'gemini-3.1-pro' || model === 'glm-5.2' || model === 'glm-5-turbo') ? 'pro' : null
-  }
+  const tierFilter = requiredTier ?? requiredTierFor(model) ?? null
 
   // Build query with optional tier filter
   let query = `
@@ -1135,6 +1138,10 @@ export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' 
 }
 
 export function markModelExhausted(model: string, apiKeyId: number | null): void {
+  // Exhaustion rows key on canonical ids; legacy-keyed rows simply expire within the TTL.
+  const raw = model
+  model = normalizeModelId(raw)
+  if (raw !== model) logger.warn('db', `normalized legacy model id ${raw} -> ${model}`)
   const db = getDb()
   const now = new Date()
   const availableAt = new Date(now.getTime() + 5 * 60 * 60 * 1000) // 5 hours from now
@@ -1149,15 +1156,15 @@ export function markModelExhausted(model: string, apiKeyId: number | null): void
 }
 
 export function isModelExhaustedForAllKeys(model: string, requiredTier?: 'free' | 'pro'): boolean {
+  const raw = model
+  model = normalizeModelId(raw)
+  if (raw !== model) logger.warn('db', `normalized legacy model id ${raw} -> ${model}`)
   const db = getDb()
   const now = new Date().toISOString()
   const provider = model.startsWith('glm') ? 'zhipu' : 'google'
-  
+
   // Determine required tier based on model
-  let tierFilter: string | null | undefined = requiredTier
-  if (!tierFilter) {
-    tierFilter = (model === 'gemini-3.1-pro' || model === 'glm-5.2' || model === 'glm-5-turbo') ? 'pro' : null
-  }
+  const tierFilter = requiredTier ?? requiredTierFor(model) ?? null
   
   // If tier is specified, only check keys of that tier for the relevant provider
   if (tierFilter) {
@@ -1194,6 +1201,9 @@ export function isModelExhaustedForAllKeys(model: string, requiredTier?: 'free' 
 }
 
 export function getModelExhaustionStatus(model: string): { exhausted: boolean; availableAt: string | null } {
+  const raw = model
+  model = normalizeModelId(raw)
+  if (raw !== model) logger.warn('db', `normalized legacy model id ${raw} -> ${model}`)
   const db = getDb()
   const now = new Date().toISOString()
   

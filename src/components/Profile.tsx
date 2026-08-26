@@ -1,19 +1,46 @@
 "use client";
 
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Save, Check, Plus, Trash2, ChevronDown, ChevronUp, KeyRound, Radio, Database, Download, Upload, RefreshCw, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Check, Plus, Trash2, KeyRound, Database, Download, Upload, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { cn } from 'src/lib/utils'
-import { Message, MessageContent, MessageResponse } from './ai-elements/message'
+import { Button } from './ui/button'
+import { StrategyReview } from 'src/features/onboarding/StrategyReview'
+import type { SettingsSection } from './Sidebar'
 import type { BackupListItem } from 'src/types/backup'
 
 interface ProfileProps {
   profile: any;
+  section: SettingsSection;
   onBack: () => void;
   onSaved?: () => void;
   onTwitterHandleRebuilt?: () => void;
   onTwitterHandleRebuildRunningChange?: (running: boolean) => void;
 }
+
+const SECTION_LABELS: Record<SettingsSection, string> = {
+  account: 'Profile',
+  strategy: 'Strategy',
+  providers: 'AI providers',
+  backup: 'Backup',
+}
+
+const DETAIL_FIELDS: { label: string; key: string }[] = [
+  { label: 'Timezone', key: 'timezone' },
+  { label: 'Primary goal', key: 'primary_goal' },
+  { label: 'Niche', key: 'niche' },
+  { label: 'Specialization', key: 'specialization' },
+  { label: 'Superpower', key: 'superpower' },
+  { label: 'Target audience', key: 'target_audience' },
+  { label: 'Voice', key: 'voice_description' },
+  { label: 'Tone balance', key: 'tone_balance' },
+  { label: 'Words to avoid', key: 'avoid_words' },
+  { label: 'Branding', key: 'branding_strategy' },
+  { label: 'Tools', key: 'tools_stack' },
+  { label: 'Monetization', key: 'monetization_goals' },
+  { label: 'Growth target', key: 'growth_target' },
+  { label: 'Portfolio', key: 'portfolio_status' },
+]
 
 function XLogo({ className }: { className?: string }) {
   return (
@@ -36,7 +63,40 @@ function ipcErrorMessage(error: unknown, fallback: string) {
   return error.message.replace(/^Error invoking remote method '[^']+': Error: /, '')
 }
 
-export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebuilt, onTwitterHandleRebuildRunningChange }: ProfileProps) {
+// Same input shell as the onboarding steps: h-11 card surface, hairline
+// border, corner-radius morph on focus.
+function TextField({ label, value, onChange, placeholder, type = 'text', icon: Icon, disabled }: {
+  label?: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  type?: string
+  icon?: any
+  disabled?: boolean
+}) {
+  return (
+    <div className={cn(label ? 'space-y-2' : '')}>
+      {label && <label className="ml-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">{label}</label>}
+      <div className="group relative flex h-11 items-center rounded-xl border border-input/60 bg-card px-4 shadow-sm transition-[background-color,border-color,box-shadow,border-radius] hover:border-input focus-within:rounded-[1.25rem] focus-within:border-input">
+        <input
+          type={type}
+          aria-label={label}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          placeholder={placeholder}
+          className={cn(
+            'h-full w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50',
+            Icon ? 'pl-8' : ''
+          )}
+        />
+        {Icon && <Icon className="pointer-events-none absolute left-3 size-4 text-zinc-600 transition-colors group-focus-within:text-zinc-400" />}
+      </div>
+    </div>
+  )
+}
+
+export default function Profile({ profile, section, onBack, onSaved, onTwitterHandleRebuilt, onTwitterHandleRebuildRunningChange }: ProfileProps) {
   const [activeTab, setActiveTab] = useState<'google' | 'zhipu'>('google')
   const [primaryGoogleKey, setPrimaryGoogleKey] = useState(profile?.gemini_api_key || '')
   const [primaryZhipuKey, setPrimaryZhipuKey] = useState(profile?.zai_api_key || '')
@@ -45,7 +105,9 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
   const [codingPlan, setCodingPlan] = useState(profile?.zai_coding_plan === 1)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [expandStrategy, setExpandStrategy] = useState(false)
+  const [strategyReviewRunId, setStrategyReviewRunId] = useState<string | null>(null)
+  const [strategyBusy, setStrategyBusy] = useState(false)
+  const [strategyError, setStrategyError] = useState('')
   const [changingHandle, setChangingHandle] = useState(false)
   const [handleInput, setHandleInput] = useState('')
   const [rebuilding, setRebuilding] = useState(false)
@@ -184,6 +246,36 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
     setRebuildResult(null)
   }
 
+  const startChangingHandle = () => {
+    setChangingHandle(true)
+    setHandleInput(profile?.twitter_handle ? `@${profile.twitter_handle}` : '')
+    setRebuildError('')
+    setRebuildResult(null)
+  }
+
+  const openStrategyReview = async () => {
+    if (strategyBusy) return
+    setStrategyBusy(true)
+    setStrategyError('')
+    try {
+      const result = await window.api.getStrategyRunId()
+      if (result?.runId) {
+        setStrategyReviewRunId(result.runId)
+      } else {
+        setStrategyError('No committed strategy yet. Finish onboarding to build one.')
+      }
+    } catch {
+      setStrategyError('Could not load your strategy.')
+    } finally {
+      setStrategyBusy(false)
+    }
+  }
+
+  const closeStrategyReview = () => {
+    setStrategyReviewRunId(null)
+    setStrategyError('')
+  }
+
   const postCountCopy = (count: number) => `${count} active X draft/scheduled ${count === 1 ? 'post' : 'posts'}`
 
   const handleStartRebuild = async () => {
@@ -248,8 +340,11 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
 
   return (
     <div className="flex-1 overflow-y-auto selection:bg-foreground selection:text-background pb-32 bg-[#050507] scrollbar-none relative">
-      {/* Dynamic ambient radial lighting */}
-      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-blue-500/[0.02] blur-[150px] pointer-events-none" />
+      {/* Ambient radial lighting, matching onboarding */}
+      <div className="absolute inset-x-0 top-0 h-[560px] pointer-events-none overflow-hidden">
+        <div className="absolute left-1/2 top-[-320px] -translate-x-1/2 w-[800px] h-[800px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(59,130,246,0.05) 0%, transparent 70%)' }} />
+        <div className="absolute right-[8%] top-[120px] w-[520px] h-[520px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.035) 0%, transparent 70%)' }} />
+      </div>
 
       <motion.div 
         variants={containerVariants}
@@ -259,9 +354,9 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
       >
         
         {/* Navigation Action */}
-        <motion.div variants={itemVariants} className="mb-14">
-          <motion.button 
-            onClick={onBack} 
+        <motion.div variants={itemVariants} className="mb-14 flex items-center justify-between">
+          <motion.button
+            onClick={onBack}
             whileHover={{ x: -2 }}
             whileTap={{ scale: 0.98 }}
             disabled={rebuilding}
@@ -270,23 +365,28 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
             <ArrowLeft className="size-3.5" />
             Back to Chat
           </motion.button>
+          <span className="text-[10px] tracking-[0.16em] font-bold text-zinc-600 uppercase">
+            {SECTION_LABELS[section]}
+          </span>
         </motion.div>
 
         {/* Identity Section */}
+        {section === 'account' && (
+        <>
         <motion.header variants={itemVariants} className="mb-14">
-          <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight leading-none mb-4">
+          <h1 className="text-3xl md:text-4xl font-bold text-white tracking-tight leading-none mb-4">
             {profile?.name || 'Anonymous User'}
           </h1>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs font-semibold tracking-wide text-zinc-500">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-zinc-400">
             {profile?.niche && (
               <span className="text-zinc-300">{profile.niche}</span>
             )}
             {profile?.niche && (profile?.twitter_handle || profile?.reddit_username) && (
-              <span className="text-zinc-800">/</span>
+              <span className="text-zinc-700">•</span>
             )}
             {profile?.twitter_handle && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <XLogo className="size-3 text-zinc-400" />
+              <span className="inline-flex items-center gap-2">
+                <XLogo className="size-3.5 text-zinc-400" />
                 <a
                   href={`https://x.com/${profile.twitter_handle}`}
                   target="_blank"
@@ -296,222 +396,203 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                   @{profile.twitter_handle}
                 </a>
                 {profile.twitter_name && (
-                  <span className="text-zinc-500 font-normal">({profile.twitter_name})</span>
+                  <span className="text-xs text-zinc-600">({profile.twitter_name})</span>
                 )}
-                <button
-                  onClick={() => {
-                    setChangingHandle(true)
-                    setHandleInput(profile.twitter_handle ? `@${profile.twitter_handle}` : '')
-                    setRebuildError('')
-                    setRebuildResult(null)
-                  }}
-                  disabled={rebuilding}
-                  className="ml-1 text-[10px] uppercase tracking-[0.16em] text-zinc-400 hover:text-white transition-colors disabled:opacity-30 disabled:pointer-events-none"
-                >
-                  Change
-                </button>
               </span>
             )}
             {profile?.reddit_username && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <RedditLogo className="size-3 text-zinc-400" />
-                <a 
-                  href={`https://reddit.com/user/${profile.reddit_username}`} 
-                  target="_blank" 
+              <span className="inline-flex items-center gap-2">
+                <RedditLogo className="size-3.5 text-zinc-400" />
+                <a
+                  href={`https://reddit.com/user/${profile.reddit_username}`}
+                  target="_blank"
                   rel="noreferrer"
                   className="text-zinc-300 hover:text-white transition-colors"
                 >
                   u/{profile.reddit_username}
                 </a>
                 {profile.reddit_display_name && (
-                  <span className="text-zinc-500 font-normal">({profile.reddit_display_name})</span>
+                  <span className="text-xs text-zinc-600">({profile.reddit_display_name})</span>
                 )}
               </span>
             )}
           </div>
         </motion.header>
 
-        {changingHandle && (
-          <motion.section variants={itemVariants} className="mb-14 p-1.5 rounded-3xl bg-white/[0.02] border border-white/[0.04] shadow-[0_12px_40px_rgba(0,0,0,0.5)]">
-            <div className="p-6 md:p-8 rounded-[calc(1.5rem+4px)] bg-[#0c0c10]/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] space-y-6">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 mb-2">
-                    X Voice Source
-                  </h2>
-                  <p className="text-sm text-zinc-300 font-medium max-w-xl leading-6">
-                    Pick any public X profile for voice and strategy inspiration. It does not need to be your account.
-                  </p>
+        {/* Gathered profile details */}
+        {(() => {
+          const details = DETAIL_FIELDS
+            .map(({ label, key }) => ({ label, value: typeof profile?.[key] === 'string' ? profile[key].trim() : profile?.[key] }))
+            .filter(d => d.value)
+          if (details.length === 0) return null
+          return (
+            <motion.div variants={itemVariants} className="mb-14 grid grid-cols-1 sm:grid-cols-2 gap-x-10 gap-y-6">
+              {details.map(({ label, value }) => (
+                <div key={label} className="space-y-1.5">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">{label}</div>
+                  <div className="text-sm leading-6 text-zinc-300">{value}</div>
                 </div>
-                {!rebuilding && (
-                  <button
-                    onClick={resetHandleChange}
-                    className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 hover:text-white transition-colors"
-                  >
-                    Back
-                  </button>
-                )}
-              </div>
-
-              {!rebuildResult && (
-                <div className="space-y-5">
-                  <label className="sr-only" htmlFor="twitter-handle-rebuild-input">X handle</label>
-                  <input
-                    id="twitter-handle-rebuild-input"
-                    value={handleInput}
-                    onChange={(e) => {
-                      setHandleInput(e.target.value)
-                      setRebuildError('')
-                    }}
-                    disabled={rebuilding}
-                    placeholder="@handle"
-                    className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl px-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10 disabled:opacity-50"
-                  />
-
-                  <div className="space-y-5 p-5 rounded-2xl bg-white/[0.015] border border-white/[0.04]">
-                    <div className="space-y-2 text-xs text-zinc-400 leading-5">
-                      <p>The entire shared cross-platform playbook will be rebuilt, including Reddit-related strategy.</p>
-                      <p>Any active X drafts and scheduled posts will be archived and hidden from the active schedule.</p>
-                      <p>Chats and settings remain.</p>
-                      <p>Existing setup stays intact if rebuilding fails.</p>
-                      <p>Likes/bookmarks are only used when the selected handle matches the signed-in X account.</p>
-                    </div>
-                    {rebuilding ? (
-                      <div role="status" aria-live="polite" className="flex items-center gap-3 text-xs text-zinc-300 pt-1">
-                        <div className="w-3 h-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
-                        <span>{rebuildPhase}</span>
-                      </div>
-                    ) : rebuildError ? (
-                      <div className="space-y-4">
-                        <div role="alert" className="p-4 rounded-2xl bg-red-500/10 border border-red-500/15 text-xs text-red-200 leading-5">
-                          {rebuildError}
-                        </div>
-                        <div className="flex gap-3">
-                          <button onClick={handleStartRebuild} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors">
-                            Retry rebuild
-                          </button>
-                          <button onClick={resetHandleChange} className="px-5 py-3 rounded-full bg-white/[0.03] text-zinc-400 text-xs font-bold hover:text-white hover:bg-white/[0.05] transition-colors">
-                            Back
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col sm:flex-row gap-3 pt-1">
-                        <button onClick={handleStartRebuild} disabled={!handleInput.trim()} className="px-5 py-3 rounded-full bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors disabled:opacity-30 disabled:pointer-events-none">
-                          Start rebuild
-                        </button>
-                        <button onClick={resetHandleChange} className="px-5 py-3 rounded-full bg-white/[0.03] text-zinc-400 text-xs font-bold hover:text-white hover:bg-white/[0.05] transition-colors">
-                          Cancel
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {rebuildResult && (
-                <div role="status" aria-live="polite" className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/15 text-sm text-emerald-100 leading-6">
-                  Rebuilt strategy from @{rebuildResult.handle}{profile?.twitter_name ? ` (${profile.twitter_name})` : ''}. Archived {postCountCopy(rebuildResult.archivedCount)}.
-                </div>
-              )}
-            </div>
-          </motion.section>
+              ))}
+            </motion.div>
+          )
+        })()}
+        </>
         )}
 
-        {/* Playbook Section (Borderless Inline Accordion) */}
-        {profile?.growth_strategy && (
-          <motion.section variants={itemVariants} className="py-10 border-t border-white/[0.03]">
-            <div className="flex items-center justify-between">
-              <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
-                Strategic Playbook
-              </h2>
-              <motion.button 
-                onClick={() => setExpandStrategy(!expandStrategy)}
-                whileTap={{ scale: 0.97 }}
-                className="flex items-center gap-1.5 text-xs font-semibold text-zinc-400 hover:text-white transition-colors"
-              >
-                {expandStrategy ? (
-                  <>Collapse Playbook <ChevronUp className="size-3.5" /></>
-                ) : (
-                  <>Reveal Playbook <ChevronDown className="size-3.5" /></>
-                )}
-              </motion.button>
-            </div>
-
-            <div 
-              className={cn(
-                "grid transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]",
-                expandStrategy ? "grid-rows-[1fr] opacity-100 mt-6" : "grid-rows-[0fr] opacity-0"
-              )}
-            >
-              <div className="overflow-hidden">
-                <div className="p-1.5 rounded-2xl bg-white/[0.01] border border-white/[0.02]">
-                  <Message from="assistant">
-                    <MessageContent className="px-6 py-5">
-                      <MessageResponse className="prose prose-invert max-w-none prose-p:leading-[1.75] prose-p:text-zinc-400 prose-p:text-[13.5px] prose-p:font-normal 
-                        prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-white/95 
-                        prose-h1:text-xl prose-h2:text-lg prose-h3:text-base
-                        prose-strong:font-bold prose-strong:text-white
-                        prose-code:text-zinc-300 prose-code:bg-white/[0.04] prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none
-                        prose-ul:text-zinc-400 prose-ul:font-normal
-                        prose-ol:text-zinc-400 prose-ol:font-normal"
-                      >
-                        {profile.growth_strategy}
-                      </MessageResponse>
-                    </MessageContent>
-                  </Message>
-                </div>
+        {section === 'strategy' && (
+        <motion.section variants={itemVariants} className="space-y-10">
+          {/* Strategy overview */}
+          <div className="space-y-4">
+            <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Strategy overview</h2>
+            <p className="text-sm leading-6 text-zinc-400 max-w-xl">
+              The playbook Soxial built from your accounts. Open it to read, edit, or regenerate any part — changes apply once you approve.
+            </p>
+            <Button variant="default" size="sm" shape="round" scaleOnPress depthShadow onClick={openStrategyReview} disabled={strategyBusy || rebuilding}>
+              {strategyBusy ? 'Opening…' : 'Review & edit strategy'}
+            </Button>
+            {strategyError && (
+              <div role="alert" className="max-w-xl rounded-xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-xs leading-5 text-red-200">
+                {strategyError}
               </div>
-            </div>
-          </motion.section>
+            )}
+          </div>
+
+          {/* X voice source */}
+          <div className="space-y-4 pt-10 border-t border-white/5">
+            <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">X voice source</h2>
+            {!changingHandle ? (
+              <>
+                <p className="text-sm leading-6 text-zinc-400 max-w-xl">
+                  Pick any public X profile for voice and strategy inspiration. It does not need to be your account. Rebuilding archives active X drafts and scheduled posts.
+                </p>
+                <Button variant="outline" size="sm" shape="round" scaleOnPress depthShadow onClick={startChangingHandle} disabled={rebuilding}>
+                  Change voice source
+                </Button>
+              </>
+            ) : (
+              <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6 md:p-8 space-y-6 max-w-2xl">
+                <div className="flex items-start justify-between gap-4">
+                  <p className="text-sm text-zinc-300 font-medium leading-6">
+                    Pick any public X profile for voice and strategy inspiration. It does not need to be your account.
+                  </p>
+                  {!rebuilding && (
+                    <button
+                      onClick={resetHandleChange}
+                      className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 hover:text-white transition-colors"
+                    >
+                      Back
+                    </button>
+                  )}
+                </div>
+
+                {!rebuildResult && (
+                  <div className="space-y-5">
+                    <label className="sr-only" htmlFor="twitter-handle-rebuild-input">X handle</label>
+                    <TextField
+                      value={handleInput}
+                      onChange={(v: string) => {
+                        setHandleInput(v)
+                        setRebuildError('')
+                      }}
+                      disabled={rebuilding}
+                      placeholder="@handle"
+                    />
+
+                    <div className="space-y-5 rounded-xl border border-white/[0.05] bg-white/[0.01] p-5">
+                      <div className="space-y-2 text-xs text-zinc-400 leading-5">
+                        <p>The entire shared cross-platform playbook will be rebuilt, including Reddit-related strategy.</p>
+                        <p>Any active X drafts and scheduled posts will be archived and hidden from the active schedule.</p>
+                        <p>Chats and settings remain.</p>
+                        <p>Existing setup stays intact if rebuilding fails.</p>
+                        <p>Likes/bookmarks are only used when the selected handle matches the signed-in X account.</p>
+                      </div>
+                      {rebuilding ? (
+                        <div role="status" aria-live="polite" className="flex items-center gap-3 text-xs text-zinc-300 pt-1">
+                          <div className="w-3 h-3 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+                          <span>{rebuildPhase}</span>
+                        </div>
+                      ) : rebuildError ? (
+                        <div className="space-y-4">
+                          <div role="alert" className="rounded-xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-xs leading-5 text-red-200">
+                            {rebuildError}
+                          </div>
+                          <div className="flex gap-3">
+                            <Button variant="default" size="sm" shape="round" scaleOnPress depthShadow onClick={handleStartRebuild}>
+                              Retry rebuild
+                            </Button>
+                            <Button variant="ghost" size="sm" shape="round" scaleOnPress depthShadow onClick={resetHandleChange} className="text-zinc-500 hover:text-white">
+                              Back
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                          <Button variant="default" size="sm" shape="round" scaleOnPress depthShadow onClick={handleStartRebuild} disabled={!handleInput.trim()}>
+                            Start rebuild
+                          </Button>
+                          <Button variant="ghost" size="sm" shape="round" scaleOnPress depthShadow onClick={resetHandleChange} className="text-zinc-500 hover:text-white">
+                            Cancel
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {rebuildResult && (
+                  <div role="status" aria-live="polite" className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] px-4 py-3 text-sm leading-6 text-emerald-200">
+                    Rebuilt strategy from @{rebuildResult.handle}{profile?.twitter_name ? ` (${profile.twitter_name})` : ''}. Archived {postCountCopy(rebuildResult.archivedCount)}.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </motion.section>
         )}
 
         {/* API Settings Section */}
-        <motion.section variants={itemVariants} className="py-10 border-t border-white/[0.03]">
+        {section === 'providers' && (
+        <motion.section variants={itemVariants} className="py-10 border-t border-white/5">
           <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 mb-6">
             Access Credentials
           </h2>
 
-          <div className="space-y-6">
-            {/* Elegant Translucent Card Panel */}
-            <div className="p-1.5 rounded-3xl bg-white/[0.02] border border-white/[0.04] shadow-[0_12px_40px_rgba(0,0,0,0.5)]">
-              <div className="p-6 md:p-10 rounded-[calc(1.5rem+4px)] bg-[#0c0c10]/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] space-y-8">
-
-                {/* Sliding Tab Selector */}
-                <div className="p-0.5 rounded-xl bg-white/[0.02] border border-white/[0.04] flex max-w-[240px] relative">
-                  <button
-                    onClick={() => setActiveTab('google')}
-                    className={cn(
-                      "flex-1 py-1.5 text-[10px] uppercase tracking-wider font-bold rounded-lg transition-colors duration-300 relative z-10",
-                      activeTab === 'google' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-                    )}
-                  >
-                    {activeTab === 'google' && (
-                      <motion.span 
-                        layoutId="activeTabBackdrop"
-                        className="absolute inset-0 rounded-lg bg-white/[0.04] border border-white/[0.03] shadow-sm"
-                        transition={springTransition}
-                      />
-                    )}
-                    Google
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('zhipu')}
-                    className={cn(
-                      "flex-1 py-1.5 text-[10px] uppercase tracking-wider font-bold rounded-lg transition-colors duration-300 relative z-10",
-                      activeTab === 'zhipu' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-                    )}
-                  >
-                    {activeTab === 'zhipu' && (
-                      <motion.span 
-                        layoutId="activeTabBackdrop"
-                        className="absolute inset-0 rounded-lg bg-white/[0.04] border border-white/[0.03] shadow-sm"
-                        transition={springTransition}
-                      />
-                    )}
-                    Z.AI
-                  </button>
-                </div>
+          <div className="space-y-8">
+            {/* Sliding Tab Selector */}
+            <div className="mx-auto flex w-full max-w-[260px] rounded-xl border border-input/60 bg-card p-1 relative">
+              <button
+                onClick={() => setActiveTab('google')}
+                className={cn(
+                  "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
+                  activeTab === 'google' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                {activeTab === 'google' && (
+                  <motion.span
+                    layoutId="activeTabBackdropProfile"
+                    className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
+                    transition={springTransition}
+                  />
+                )}
+                Google
+              </button>
+              <button
+                onClick={() => setActiveTab('zhipu')}
+                className={cn(
+                  "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
+                  activeTab === 'zhipu' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                {activeTab === 'zhipu' && (
+                  <motion.span
+                    layoutId="activeTabBackdropProfile"
+                    className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
+                    transition={springTransition}
+                  />
+                )}
+                Z.AI
+              </button>
+            </div>
 
                 <AnimatePresence mode="wait">
                   {activeTab === 'google' ? (
@@ -524,22 +605,7 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                       className="space-y-6"
                     >
                       {/* Primary Key */}
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-bold block ml-1">
-                          Primary API key
-                        </label>
-                        <div className="relative flex items-center group">
-                          <input
-                            type="password"
-                            value={primaryGoogleKey}
-                            onChange={(e) => setPrimaryGoogleKey(e.target.value)}
-                            disabled={rebuilding}
-                            placeholder="AIza..."
-                            className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
-                          />
-                          <KeyRound className="size-4 text-zinc-600 group-focus-within:text-blue-500/50 absolute left-4 transition-colors" />
-                        </div>
-                      </div>
+                      <TextField label="Primary API key" value={primaryGoogleKey} onChange={setPrimaryGoogleKey} placeholder="AIza..." type="password" icon={KeyRound} disabled={rebuilding} />
 
                       {/* Google Backup Keys */}
                       <AnimatePresence mode="popLayout">
@@ -552,30 +618,22 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                             transition={springTransition}
                             className="flex items-end gap-3"
                           >
-                            <div className="flex-1 space-y-2">
-                              <label className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-bold block ml-1">
-                                Backup API key
-                              </label>
-                              <div className="relative flex items-center group">
-                                <input
-                                  type="password"
-                                  value={k.value}
-                                  onChange={(e) => setGoogleExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: e.target.value } : item))}
-                                  disabled={rebuilding}
-                                  placeholder="AIza..."
-                                  className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
-                                />
-                                <KeyRound className="size-4 text-zinc-600 group-focus-within:text-blue-500/50 absolute left-4 transition-colors" />
-                              </div>
+                            <div className="flex-1">
+                              <TextField label="Backup API key" value={k.value} onChange={(v: string) => setGoogleExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: v } : item))} placeholder="AIza..." type="password" icon={KeyRound} disabled={rebuilding} />
                             </div>
-                            <motion.button
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="icon"
+                              shape="square"
+                              scaleOnPress
+                              depthShadow
                               onClick={() => setGoogleExtras(prev => prev.filter((_, idx) => idx !== i))}
                               disabled={rebuilding}
-                              whileTap={{ scale: 0.95 }}
-                              className="flex items-center justify-center w-12 h-[54px] rounded-xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] hover:border-red-500/20 hover:bg-red-500/10 text-zinc-600 hover:text-red-400 transition-colors shrink-0 shadow-sm"
+                              aria-label="Remove key"
                             >
                               <Trash2 className="size-4" />
-                            </motion.button>
+                            </Button>
                           </motion.div>
                         ))}
                       </AnimatePresence>
@@ -585,11 +643,9 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                           onClick={() => setGoogleExtras(prev => [...prev, { value: '' }])}
                           disabled={rebuilding}
                           whileTap={{ scale: 0.98 }}
-                          className="flex items-center gap-2 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1"
+                          className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
                         >
-                          <span className="flex items-center justify-center w-6 h-6 rounded-lg bg-white/[0.02] border border-white/[0.04] group-hover:bg-white/[0.04] transition-colors">
-                            <Plus className="size-3.5" />
-                          </span>
+                          <Plus className="size-3.5" />
                           Add backup key
                         </motion.button>
                       </div>
@@ -604,22 +660,7 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                       className="space-y-6"
                     >
                       {/* Primary Zhipu Key */}
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-bold block ml-1">
-                          Primary Z.AI API key
-                        </label>
-                        <div className="relative flex items-center group">
-                          <input
-                            type="password"
-                            value={primaryZhipuKey}
-                            onChange={(e) => setPrimaryZhipuKey(e.target.value)}
-                            disabled={rebuilding}
-                            placeholder="ZAI_api_key..."
-                            className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
-                          />
-                          <KeyRound className="size-4 text-zinc-600 group-focus-within:text-blue-500/50 absolute left-4 transition-colors" />
-                        </div>
-                      </div>
+                      <TextField label="Primary Z.AI API key" value={primaryZhipuKey} onChange={setPrimaryZhipuKey} placeholder="ZAI_api_key..." type="password" icon={KeyRound} disabled={rebuilding} />
 
                       {/* Coding Plan toggle */}
                       <div className="flex items-center justify-between p-5 rounded-2xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] shadow-sm transition-colors">
@@ -658,30 +699,22 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                             transition={springTransition}
                             className="flex items-end gap-3"
                           >
-                            <div className="flex-1 space-y-2">
-                              <label className="text-[10px] uppercase tracking-[0.16em] text-zinc-500 font-bold block ml-1">
-                                Backup API key
-                              </label>
-                              <div className="relative flex items-center group">
-                                <input
-                                  type="password"
-                                  value={k.value}
-                                  onChange={(e) => setZhipuExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: e.target.value } : item))}
-                                  disabled={rebuilding}
-                                  placeholder="ZAI_api_key..."
-                                  className="w-full bg-[#040406]/50 hover:bg-[#040406]/80 focus:bg-black/90 border border-white/[0.05] hover:border-white/[0.08] focus:border-blue-500/40 rounded-xl pl-11 pr-4 py-4 text-sm font-mono text-white placeholder:text-zinc-700 outline-none focus:outline-none transition-all shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.9)] focus:ring-1 focus:ring-blue-500/10"
-                                />
-                                <KeyRound className="size-4 text-zinc-600 group-focus-within:text-blue-500/50 absolute left-4 transition-colors" />
-                              </div>
+                            <div className="flex-1">
+                              <TextField label="Backup API key" value={k.value} onChange={(v: string) => setZhipuExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: v } : item))} placeholder="ZAI_api_key..." type="password" icon={KeyRound} disabled={rebuilding} />
                             </div>
-                            <motion.button
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="icon"
+                              shape="square"
+                              scaleOnPress
+                              depthShadow
                               onClick={() => setZhipuExtras(prev => prev.filter((_, idx) => idx !== i))}
                               disabled={rebuilding}
-                              whileTap={{ scale: 0.95 }}
-                              className="flex items-center justify-center w-12 h-[54px] rounded-xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] hover:border-red-500/20 hover:bg-red-500/10 text-zinc-600 hover:text-red-400 transition-colors shrink-0 shadow-sm"
+                              aria-label="Remove key"
                             >
                               <Trash2 className="size-4" />
-                            </motion.button>
+                            </Button>
                           </motion.div>
                         ))}
                       </AnimatePresence>
@@ -691,11 +724,9 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                           onClick={() => setZhipuExtras(prev => [...prev, { value: '' }])}
                           disabled={rebuilding}
                           whileTap={{ scale: 0.98 }}
-                          className="flex items-center gap-2 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1"
+                          className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
                         >
-                          <span className="flex items-center justify-center w-6 h-6 rounded-lg bg-white/[0.02] border border-white/[0.04] group-hover:bg-white/[0.04] transition-colors">
-                            <Plus className="size-3.5" />
-                          </span>
+                          <Plus className="size-3.5" />
                           Add backup key
                         </motion.button>
                       </div>
@@ -703,35 +734,36 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                   )}
                 </AnimatePresence>
 
-              </div>
-            </div>
-
             {/* Save Button */}
-            <div className="pt-2 flex justify-end">
-              <motion.button
-                onClick={handleSaveKeys}
-                whileTap={{ scale: 0.96 }}
-                disabled={rebuilding || saving || (!primaryGoogleKey.trim() && !primaryZhipuKey.trim() && !googleExtras.some(e => e.value.trim()) && !zhipuExtras.some(e => e.value.trim()))}
-                className="group flex items-center gap-3 pl-5 pr-2 py-2 bg-white hover:bg-zinc-100 text-[#050507] rounded-full text-[13px] font-bold transition-all duration-300 disabled:opacity-30 disabled:pointer-events-none shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-white/[0.04]"
-              >
-                {saving ? (
-                  <span className="animate-pulse">Saving...</span>
-                ) : saved ? (
-                  <>Changes Applied</>
-                ) : (
-                  <>Save credentials</>
-                )}
-
-                <span className="flex items-center justify-center w-8 h-8 rounded-full bg-zinc-900 text-white group-hover:translate-x-0.5 group-hover:-translate-y-[1px] transition-transform duration-300">
-                  {saved ? <Check className="size-3.5 stroke-[2.5]" /> : <Save className="size-3.5" />}
-                </span>
-              </motion.button>
+          <div className="flex justify-end pt-1">
+            <Button
+              onClick={handleSaveKeys}
+              variant="default"
+              size="default"
+              shape="round"
+              scaleOnPress
+              depthShadow
+              disabled={rebuilding || saving || (!primaryGoogleKey.trim() && !primaryZhipuKey.trim() && !googleExtras.some(e => e.value.trim()) && !zhipuExtras.some(e => e.value.trim()))}
+            >
+              {saving ? (
+                <span className="animate-pulse">Saving...</span>
+              ) : saved ? (
+                <>
+                  <Check className="size-4" />
+                  Changes Applied
+                </>
+              ) : (
+                <>Save credentials</>
+              )}
+            </Button>
             </div>
           </div>
         </motion.section>
+        )}
 
         {/* Backup and Export Section */}
-        <motion.section variants={itemVariants} className="py-10 border-t border-white/[0.03]">
+        {section === 'backup' && (
+        <motion.section variants={itemVariants} className="py-10 border-t border-white/5">
           <div className="flex items-start justify-between gap-4 mb-6">
             <div>
               <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 mb-2">
@@ -744,33 +776,43 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
             <Database className="size-4 text-zinc-600 shrink-0" />
           </div>
 
-          <div className="p-1.5 rounded-3xl bg-white/[0.02] border border-white/[0.04]">
-            <div className="p-6 md:p-8 rounded-[calc(1.5rem+4px)] bg-[#0c0c10]/40 space-y-6">
+          <div className="rounded-2xl border border-white/[0.05] bg-white/[0.01] p-6 md:p-8 space-y-6">
               <div className="flex flex-wrap gap-3">
-                <button
+                <Button
                   onClick={handleCreateBackup}
+                  variant="default"
+                  size="sm"
+                  shape="round"
+                  scaleOnPress
+                  depthShadow
                   disabled={backupBusy || rebuilding}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-white text-[#050507] text-xs font-bold hover:bg-zinc-100 transition-colors disabled:opacity-40"
                 >
                   <Database className="size-3.5" />
                   {backupBusy ? 'Working…' : 'Backup now'}
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={handleExport}
+                  variant="outline"
+                  size="sm"
+                  shape="round"
+                  scaleOnPress
+                  depthShadow
                   disabled={backupBusy || rebuilding}
-                  className="inline-flex items-center gap-2 px-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.06] text-zinc-200 text-xs font-bold hover:bg-white/[0.08] transition-colors disabled:opacity-40"
                 >
                   <Download className="size-3.5" />
                   Export data
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={() => void refreshBackups()}
+                  variant="ghost"
+                  size="icon"
+                  shape="square"
+                  scaleOnPress
                   disabled={backupBusy}
                   aria-label="Refresh backups"
-                  className="inline-flex items-center justify-center size-10 rounded-xl bg-white/[0.03] border border-white/[0.05] text-zinc-500 hover:text-white transition-colors disabled:opacity-40"
                 >
                   <RefreshCw className="size-3.5" />
-                </button>
+                </Button>
               </div>
 
               <label className="flex items-center gap-3 text-xs text-zinc-400 cursor-pointer">
@@ -785,7 +827,7 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
               </label>
 
               {backupMessage && (
-                <div role="status" aria-live="polite" className="text-xs text-emerald-200 bg-emerald-500/10 border border-emerald-500/15 rounded-xl px-4 py-3">
+                <div role="status" aria-live="polite" className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] px-4 py-3 text-xs leading-5 text-emerald-200">
                   {backupMessage}
                 </div>
               )}
@@ -819,17 +861,73 @@ export default function Profile({ profile, onBack, onSaved, onTwitterHandleRebui
                   </div>
                 ))}
               </div>
-            </div>
           </div>
         </motion.section>
+        )}
 
         {/* Footer */}
-        {profile?.created_at && (
-          <motion.div variants={itemVariants} className="mt-20 pt-8 border-t border-white/[0.03] text-[9px] tracking-[0.2em] text-zinc-600 font-bold uppercase text-center">
+        {section === 'account' && profile?.created_at && (
+          <motion.div variants={itemVariants} className="mt-14 pt-8 border-t border-white/[0.03] text-[9px] tracking-[0.2em] text-zinc-600 font-bold uppercase text-center">
             Initialized {new Date(profile.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
           </motion.div>
         )}
       </motion.div>
+
+      {/* Strategy review overlay — same surface as post-onboarding review */}
+      <AnimatePresence>
+        {strategyReviewRunId && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="fixed inset-0 z-50 overflow-y-auto bg-[#050507]/85"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Strategy overview"
+          >
+            <div className="mx-auto flex min-h-full w-[min(680px,calc(100vw-3rem))] flex-col justify-center px-2 py-10">
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 6 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                className="relative"
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold tracking-tight text-white">Strategy overview</h2>
+                  <button
+                    onClick={closeStrategyReview}
+                    aria-label="Close strategy overview"
+                    className="p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-white/[0.05] transition-colors"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+                {strategyError && (
+                  <div role="alert" className="mb-4 rounded-xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-xs leading-5 text-red-200">
+                    {strategyError}
+                  </div>
+                )}
+                <StrategyReview
+                  runId={strategyReviewRunId}
+                  onCommitted={() => {
+                    closeStrategyReview()
+                    onSaved?.()
+                  }}
+                  onError={(message) => {
+                    if (message === 'saved-later') {
+                      closeStrategyReview()
+                      return
+                    }
+                    setStrategyError(message)
+                  }}
+                />
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

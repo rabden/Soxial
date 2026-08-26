@@ -26,6 +26,7 @@ interface Window {
     cancelOnboarding: (runId: string) => Promise<{ success: boolean; error?: string }>
     pauseOnboarding: (runId: string) => Promise<{ success: boolean; error?: string }>
     resetOnboarding: () => Promise<any>
+    getStrategyRunId: () => Promise<{ runId?: string | null }>
     getStrategyDraft: (runId: string) => Promise<{ success: boolean; runId?: string; version?: number; status?: string; draft?: any; error?: string }>
     updateDraftSection: (runId: string, expectedVersion: number, section: string, payload: any) => Promise<{ success: boolean; version?: number; error?: string; code?: string }>
     regenerateDraftSection: (runId: string, expectedVersion: number, section: string) => Promise<{ success: boolean; version?: number; error?: string; code?: string }>
@@ -56,6 +57,9 @@ interface Window {
     generateQuickActions: () => Promise<any>
     getMedia: (filename: string) => Promise<any>
     fetchLinkPreview: (url: string) => Promise<any>
+    onPuterAuthEvent: (cb: (event: import('./puter-auth-events').PuterAuthEvent) => void) => () => void
+    puterAuthCancel: () => Promise<boolean>
+    puterAuthOpen: () => Promise<boolean>
     onChatChunk: (cb: (data: { text: string; sessionId: number }) => void) => () => void
     onChatToolCall: (cb: (data: { name: string; args: any; sessionId: number }) => void) => () => void
     onChatToolResult: (cb: (data: { name: string; result: any; sessionId: number }) => void) => () => void

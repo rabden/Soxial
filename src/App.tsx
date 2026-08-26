@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState, useEffect } from 'react'
+import PuterAuthBanner from './components/PuterAuthBanner'
 
 const Onboarding = lazy(() => import('./components/Onboarding'))
 const Chat = lazy(() => import('./components/Chat'))
@@ -32,6 +33,7 @@ export default function App() {
       </div>
     }>
       {onboardingComplete ? <Chat initialSessionId={initialSessionId} /> : <Onboarding onComplete={(sessionId?: number) => { if (sessionId) setInitialSessionId(sessionId); checkOnboarding() }} />}
+      <PuterAuthBanner />
     </Suspense>
   )
 }
