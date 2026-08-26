@@ -565,11 +565,24 @@ export function createTools(opts?: {
       description: 'Read the complete image generation guide — platform specs, 5-part prompting framework, brand style integration, examples, common mistakes, and quality checklist. Call this BEFORE generate_image to get full context for crafting the best prompt.',
       parameters: z.object({}),
       execute: async () => {
-        const { readFileSync } = await import('fs')
-        const { join } = await import('path')
-        const guidePath = join(__dirname, '../../references/image-generation.md')
-        const content = readFileSync(guidePath, 'utf-8')
-        return { guide: content }
+        const { readImageGenerationGuide } = await import('./reference-files')
+        return { guide: readImageGenerationGuide() }
+      }
+    },
+
+    read_workflow_guide: {
+      description: 'Load a workflow playbook or mandatory ruleset before doing work in its scope. Call this BEFORE running any workflow (post crafting, engagement, planning, strategy, intelligence, trends) and ALWAYS before writing replies/posts for voice rules and media checks. Returns the full markdown guide.',
+      parameters: z.object({
+        guide: z.enum(['post-crafting', 'reply-crafting', 'thread-writing', 'engagement-session', 'content-planner', 'strategy-chat', 'intelligence-update', 'competitor-analysis', 'trend-hunter', 'media-safety', 'voice-guide']).describe('Which guide to load.')
+      }),
+      execute: async ({ guide }) => {
+        const { readWorkflowGuide } = await import('./reference-files')
+        try {
+          return { guide, content: readWorkflowGuide(guide) }
+        } catch (e: any) {
+          logger.warn('tools', `read_workflow_guide(${guide}) failed: ${e.message}`)
+          return { error: e.message }
+        }
       }
     },
 

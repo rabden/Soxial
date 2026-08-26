@@ -150,6 +150,23 @@ export function toolResultPhrase(name: string, args: any, result: any): string {
       return isRecord(result) && result.success ? "Gap recorded" : "Failed";
     case "record_evidence_assessment":
       return isRecord(result) && result.success ? "Assessment recorded" : "Failed";
+    case "read_workflow_guide": {
+      const r = isRecord(result) ? result : {};
+      return typeof r.error === "string" ? (shortError(r.error) ?? "Failed") : "Playbook loaded";
+    }
+    case "run_subagent": {
+      const r = isRecord(result) ? result : {};
+      if (r.ok === false || typeof r.error === "string") {
+        return r.error === "cancelled" ? "Cancelled" : (shortError(r.error) ?? "Failed");
+      }
+      const phrases: Record<string, string> = {
+        researcher: "Findings ready",
+        "reply-crafter": "Reply drafts ready",
+        "post-composer": "Post drafts ready",
+        "intel-updater": "Insights saved",
+      };
+      return (typeof r.kind === "string" && phrases[r.kind]) || "Done";
+    }
     default:
       break;
   }

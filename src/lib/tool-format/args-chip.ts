@@ -62,6 +62,16 @@ export function toolArgsChip(name: string, args: any): string | undefined {
       return Array.isArray(a.questions) ? countNoun(a.questions.length, "question", "questions") : undefined;
     case "record_onboarding_gap":
       return typeof a.artifact === "string" ? a.artifact.replace(/_/g, " ") : undefined;
+    case "read_workflow_guide":
+      return typeof a.guide === "string" ? truncate(a.guide.replace(/-/g, " "), 32) : undefined;
+    case "run_subagent":
+      return joinParts(
+        [
+          typeof a.kind === "string" ? a.kind.replace(/-/g, " ") : undefined,
+          typeof a.task === "string" ? truncate(a.task.replace(/\s+/g, " ").trim(), 28) : undefined,
+        ],
+        48,
+      );
     case "update_soxial_profile":
       return isRecord(a.data) ? countNoun(Object.keys(a.data).length, "field", "fields") : undefined;
     default:

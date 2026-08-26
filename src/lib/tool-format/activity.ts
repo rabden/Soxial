@@ -128,6 +128,22 @@ function activityFor(name: string, args: any, result: any, callOrdinal = 0): Act
       return { key: name, text: "Recorded a data gap", bucket: "questions" };
     case "record_evidence_assessment":
       return { key: name, text: "Assessed evidence confidence", bucket: "questions" };
+    case "read_workflow_guide":
+      return {
+        key: `${name}|${typeof a.guide === "string" ? a.guide : ""}`,
+        text: `Loaded ${typeof a.guide === "string" ? a.guide.replace(/-/g, " ") : "playbook"} playbook`,
+        bucket: "reads",
+      };
+    case "run_subagent": {
+      const kind = typeof a.kind === "string" ? a.kind : "";
+      // Ordinal in the key: repeated delegations of the same kind must stay
+      // distinct so the rollup counts each run.
+      return {
+        key: `${name}|${kind}-${callOrdinal}`,
+        text: kind === "intel-updater" ? "Ran intelligence update" : `Delegated to ${kind.replace(/-/g, " ") || "specialist"}`,
+        bucket: "reads",
+      };
+    }
     default:
       break;
   }

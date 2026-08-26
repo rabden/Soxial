@@ -25,6 +25,7 @@ const DETAIL_KEY_PRIORITY = [
   "tweet_id", "post_id", "list_id", "url", "action", "platform",
   "scheduled_time", "limit", "max", "model", "filename",
   "by_name", "by_content", "by_handle", "by_signal", "items", "questions",
+  "guide", "kind", "task",
   "text", "content", "reply", "answer", "prompt", "data",
 ];
 

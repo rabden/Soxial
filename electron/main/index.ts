@@ -1371,7 +1371,9 @@ function setupIpc() {
         mainWindow?.webContents.send('chat:question', { ...q, sessionId: sid })
       const currentProfile = getProfile()
       const platforms = connectedPlatformsFromProfile(currentProfile)
-      const chatTools = createChatTools(sendChatQuestion, platforms)
+      // The chat run's controller is shared with delegated subagents, so
+      // chat:stop also stops any in-flight subagent work.
+      const chatTools = createChatTools(sendChatQuestion, platforms, { abortController: run.abortController })
 
       // Determine fallback chain based on API tier
       const tier = getApiTier().tier

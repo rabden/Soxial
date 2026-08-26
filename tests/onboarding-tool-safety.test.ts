@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createTools } from '../electron/main/tools'
 import {
+  ENRICHMENT_CAPABILITIES,
   MUTATING_CAPABILITIES,
   SAFE_CAPABILITIES,
   TOOL_CAPABILITIES,
@@ -116,16 +117,54 @@ describe('onboarding tool safety', () => {
     expect(listDeniedTools(withUnknownTool, SAFE_CAPABILITIES)).toEqual(['publish_to_new_network'])
   })
 
-  it('keeps safe and mutating capability sets disjoint', () => {
+  it('keeps safe and mutating sets disjoint', () => {
     for (const capability of SAFE_CAPABILITIES) {
       expect(MUTATING_CAPABILITIES.has(capability)).toBe(false)
     }
+  })
+
+  it('classifies every capability as safe, mutating, or the chat-only orchestration class', () => {
     const everyCapability = new Set(Object.values(TOOL_CAPABILITIES))
     for (const capability of everyCapability) {
-      expect(
-        SAFE_CAPABILITIES.has(capability) || MUTATING_CAPABILITIES.has(capability),
-        `capability ${capability} must be classified as safe or mutating`,
-      ).toBe(true)
+      const classified =
+        SAFE_CAPABILITIES.has(capability)
+        || MUTATING_CAPABILITIES.has(capability)
+        // Orchestration is deliberately outside both restricted-partition sets;
+        // its exclusions are asserted in their own test below.
+        || capability === 'orchestration'
+      expect(classified, `capability ${capability} must be classified`).toBe(true)
     }
+  })
+
+  it('classifies orchestration as chat-only: absent from every restricted set', () => {
+    // Orchestration is a third class on purpose: subagent delegation must
+    // never widen the onboarding or enrichment surface, even if someone later
+    // moves the tool into the shared createTools() map.
+    const everyCapability = new Set(Object.values(TOOL_CAPABILITIES))
+    expect(everyCapability.has('orchestration')).toBe(true)
+
+    for (const restricted of [SAFE_CAPABILITIES, ENRICHMENT_CAPABILITIES]) {
+      expect(restricted.has('orchestration')).toBe(false)
+    }
+
+    const synthetic = {
+      read_profile: { description: 'safe read' },
+      run_subagent: { description: 'delegate to a specialist' },
+    } as Record<string, unknown>
+
+    expect(filterToolsByCapability(synthetic, SAFE_CAPABILITIES)).not.toHaveProperty('run_subagent')
+    expect(filterToolsByCapability(synthetic, ENRICHMENT_CAPABILITIES)).not.toHaveProperty('run_subagent')
+    expect(filterToolsByCapability(synthetic, SAFE_CAPABILITIES)).toHaveProperty('read_profile')
+    // isMutatingTool reports public/account mutation only; orchestration is
+    // withheld from restricted sets by the capability default-deny instead.
+    expect(isMutatingTool('run_subagent')).toBe(false)
+    expect(isMutatingTool('twitter_post')).toBe(true)
+  })
+
+  it('keeps guide loading available wherever reads are allowed', () => {
+    const base = createTools({ platforms: { twitter: true, reddit: true } }) as Record<string, unknown>
+    const onboardingSet = filterToolsByCapability(base, SAFE_CAPABILITIES)
+    expect(onboardingSet).toHaveProperty('read_workflow_guide')
+    expect(getToolCapability('read_workflow_guide')).toBe('read')
   })
 })

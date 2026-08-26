@@ -77,6 +77,8 @@ This document provides a comprehensive catalog of all AI agent tools available i
 | | `generate_image` | Generate image via Gemini or Puter.js | No | Gemini SDK `interactions.create` / Puter.js `client.ai.txt2img` |
 | **Interaction** | `ask_user` | Morph chat prompt into MCQ or text UI | No | Electron IPC event (`chat:question`) |
 | | `ask_user_questions` | Multi-question interview UI (onboarding) | No | Electron IPC event (`onboarding:question`) |
+| **Guides & delegation** | `read_workflow_guide` | Load a workflow playbook or mandatory ruleset (post-crafting, engagement-session, voice-guide, media-safety, …) | No | Reads packaged markdown from `references/` |
+| | `run_subagent` | Delegate a bounded task to a specialist subagent (`researcher`, `reply-crafter`, `post-composer`, `intel-updater`) | No | Nested agent run with whitelisted read/write tools |
 
 ---
 
@@ -242,3 +244,28 @@ This document provides a comprehensive catalog of all AI agent tools available i
 - **Description:** Onboarding interview tool asking all initial questions in a single multi-step wizard.
 - **Parameters:** Array `questions` containing `id`, `text`, `type`, `options`.
 - **Execution Mechanism:** Emits IPC event `onboarding:question` and waits for batch response via IPC event `onboarding:answer`.
+
+---
+
+### 6. Workflow Guides & Subagent Delegation
+
+#### `read_workflow_guide`
+- **Description:** Loads a workflow playbook or mandatory ruleset before the agent works in that scope (the same pattern as `read_image_guide` before image generation).
+- **Parameters:** `guide` (`post-crafting`, `reply-crafting`, `thread-writing`, `engagement-session`, `content-planner`, `strategy-chat`, `intelligence-update`, `competitor-analysis`, `trend-hunter`, `media-safety`, `voice-guide`).
+- **Execution Mechanism:** Reads packaged markdown from `references/workflows/` and `references/` via a resolver that checks both dev (`app.getAppPath()/references`) and packaged layouts (`process.resourcesPath/references`).
+- **Result:** `{ guide, content }` or `{ error }`.
+- **Capability:** `read`.
+
+#### `run_subagent`
+- **Description:** Delegates a bounded task to a specialist subagent. The chat agent remains the orchestrator: it owns all user interaction, approvals, media verification, and public actions. Subagents cannot see the conversation, cannot ask questions, and can never publish.
+- **Kinds:**
+  | Kind | Purpose | Tool scope |
+  |---|---|---|
+  | `researcher` | Read-only scans → structured research summary | Social/local reads only |
+  | `reply-crafter` | Voice-matched reply drafts for given posts | Voice/archive reads + post fetch + image inspection |
+  | `post-composer` | Post/thread variations from a research summary | Hooks/pillars/voice/profile/memory reads |
+  | `intel-updater` | Performance analysis; appends memory/milestones/hook re-ranks | Reads + `save_memory`, `save_milestone`, `save_hook` |
+- **Parameters:** `kind`, `task` (self-contained instruction), `context` (optional supporting material).
+- **Execution Mechanism:** Nested `runAgent` with the kind's whitelisted tools, own system prompt, bounded step budget (8–10), no `sessionId` (chat step persistence untouched), and the parent run's `AbortController`.
+- **Result:** `{ ok, kind, summary }` with `summary` bounded to ~4 KB, or `{ ok: false, kind, error }`.
+- **Capability:** `orchestration` — chat-only by construction (added in `createChatTools`) and excluded from every restricted capability set by default-deny.

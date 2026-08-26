@@ -14,6 +14,12 @@ export type ToolCapability =
   | 'public-action'
   | 'account-action'
   | 'interactive'
+  /**
+   * Spawns a nested agent run. Chat-only: excluded from every restricted set,
+   * because onboarding/enrichment budgets assume single bounded runs and a
+   * subagent whitelisting bug must never widen their surface.
+   */
+  | 'orchestration'
 
 /** Capabilities that never mutate the user's public presence or accounts. */
 export const SAFE_CAPABILITIES: ReadonlySet<ToolCapability> = new Set<ToolCapability>([
@@ -78,6 +84,12 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, ToolCapability>> = {
   ask_user_questions: 'interactive',
   record_onboarding_gap: 'strategy-write',
   record_evidence_assessment: 'strategy-write',
+
+  // ── Orchestration (chat-only; never granted to restricted sets) ──────────
+  run_subagent: 'orchestration',
+
+  // ── Reference loading ─────────────────────────────────────────────────────
+  read_workflow_guide: 'read',
 
   // ── X / Twitter ───────────────────────────────────────────────────────────
   twitter_status: 'read',

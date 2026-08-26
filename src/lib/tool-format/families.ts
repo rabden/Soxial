@@ -68,6 +68,7 @@ export const NOISE_TOOLS = new Set([
   "reddit_login",
   "reddit_whoami",
   "read_image_guide",
+  "read_workflow_guide",
 ]);
 
 /** Past-tense verb for social actions; resolved against the action arg. */

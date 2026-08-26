@@ -77,6 +77,10 @@ const TOOL_LABELS: Record<string, string> = {
   read_social_content: "Reading social archive",
   schedule_post: "Scheduling post",
   get_scheduled_posts: "Reading scheduled posts",
+
+  // Playbooks & delegation
+  read_workflow_guide: "Loading playbook",
+  run_subagent: "Delegating to specialist",
 };
 
 const UPDATE_PROFILE_NOTE =

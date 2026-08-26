@@ -177,6 +177,8 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   generate_image: ImageIcon,
   schedule_post: CalendarClock,
   get_scheduled_posts: CalendarClock,
+  read_workflow_guide: BookOpen,
+  run_subagent: Users,
   ask_user: MessageSquare,
 };
 
