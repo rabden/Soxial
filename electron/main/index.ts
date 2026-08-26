@@ -34,6 +34,7 @@ import {
 import { createTools } from './tools'
 import { createDraftScopedTools } from './draft-tools'
 import { SAFE_CAPABILITIES, filterToolsByCapability } from './tool-capabilities'
+import { teardownAllSubagents } from './orchestration'
 import { ENRICHMENT_EVENT_CHANNEL, ONBOARDING_EVENT_CHANNEL } from '../../src/types/onboarding-events'
 import { createBackup, listBackups, scheduleAutomaticBackups, stopAutomaticBackups, verifyBackup } from './backup'
 
@@ -250,6 +251,9 @@ app.on('window-all-closed', () => {
   clearPendingQuestions('window-closed')
   clearPendingChatQuestions('window-closed')
   onboardingRuns.abortAll('window-closed')
+  // Delegated subagents cannot outlive their window: settle every pending
+  // promise exactly once instead of leaving runs pending on exit.
+  teardownAllSubagents('window-closed')
   if (process.platform !== 'darwin') app.quit()
 })
 
@@ -260,6 +264,7 @@ app.on('before-quit', () => {
   clearPendingQuestions('app-quit')
   clearPendingChatQuestions('app-quit')
   onboardingRuns.abortAll('app-quit')
+  teardownAllSubagents('app-quit')
 })
 
 /**

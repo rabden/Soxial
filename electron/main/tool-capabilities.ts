@@ -87,6 +87,8 @@ export const TOOL_CAPABILITIES: Readonly<Record<string, ToolCapability>> = {
 
   // ── Orchestration (chat-only; never granted to restricted sets) ──────────
   run_subagent: 'orchestration',
+  get_subagent_output: 'orchestration',
+  cancel_subagent: 'orchestration',
 
   // ── Reference loading ─────────────────────────────────────────────────────
   read_workflow_guide: 'read',

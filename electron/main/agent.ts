@@ -8,7 +8,7 @@ import { PendingInteractionRegistry } from './pending-interaction'
 import { KnownIdentity, recommendedQuestionCountFromAssessment, validateInterviewQuestions } from './interview-validation'
 import { connectedPlatformsFromProfile, type EvidenceAssessment } from './onboarding-run'
 import { createDraftScopedTools } from './draft-tools'
-import { executeSubagent, subagentInputSchema, type SubagentKind } from './subagents'
+import { createSubagentTools } from './orchestration'
 
 type GapArtifact = 'baseline_metrics' | 'audience_memory'
 type ToolMap = Record<string, { description: string; parameters: any; execute: (args: any) => Promise<any> }>
@@ -552,21 +552,7 @@ export function createChatTools(
   const base = createTools({ defaultMax: 10, platforms })
   return {
     ...base,
-    run_subagent: {
-      description:
-        'Delegate a bounded task to a specialist subagent and manage its result. Kinds: "researcher" (read-only scans → structured research summary), "reply-crafter" (voice-matched reply drafts for given posts), "post-composer" (post variations from a research summary), "intel-updater" (performance analysis + memory/milestone/hook updates). The subagent CANNOT see this conversation, cannot ask the user anything, and can never publish — you keep all user interaction, approvals, and sending. Delegate fan-out research (multi-keyword scans), bulk reply drafting (3+ replies), and intelligence updates; do quick single lookups yourself.',
-      parameters: subagentInputSchema,
-      execute: async (input: { kind: SubagentKind; task: string; context?: string }) => {
-        const result = await executeSubagent(input, {
-          platforms,
-          abortController: interaction?.abortController,
-        })
-        if (!result.ok) {
-          return { ok: false, kind: result.kind, error: result.error ?? 'Subagent failed.' }
-        }
-        return { ok: true, kind: result.kind, summary: result.summary }
-      },
-    },
+    ...createSubagentTools({ platforms, abortController: interaction?.abortController }),
     ask_user: {
       description:
         'Ask the user a question or request permission/clarification. The prompt input morphs into a question UI. Use type "single" for yes/no or MCQ, "multi" for multiple selections, "text" for open input. Always supply good options for single/multi.',

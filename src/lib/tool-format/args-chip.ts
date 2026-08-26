@@ -72,6 +72,9 @@ export function toolArgsChip(name: string, args: any): string | undefined {
         ],
         48,
       );
+    case "get_subagent_output":
+    case "cancel_subagent":
+      return shortId(a.runId);
     case "update_soxial_profile":
       return isRecord(a.data) ? countNoun(Object.keys(a.data).length, "field", "fields") : undefined;
     default:

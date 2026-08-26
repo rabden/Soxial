@@ -1,25 +1,20 @@
-// Subagent orchestration for the chat agent.
+// Subagent definitions — pure data.
 //
 // Mirrors the source skill's specialized sub-agents (feed-researcher,
 // reply-crafter, post-composer, intel-updater): the main chat agent delegates
 // bounded, well-scoped tasks and stays owner of all user interaction,
 // approvals, and public actions.
 //
-// Safety model:
-// - Whitelists are EXACT tool-name sets resolved against the platform-scoped
-//   base tools. Unknown names silently drop (fail closed).
+// All RUNTIME machinery (admission, timeouts, retries, backgrounding,
+// cancellation, settlement) lives in ./orchestration.ts.
+//
+// Safety model enforced by these whitelists:
+// - Exact tool-name sets resolved against platform-scoped base tools. Unknown
+//   names silently drop (fail closed).
 // - No whitelist contains public-action, account-action, or interactive
 //   tools, so a subagent can neither publish nor ask the user anything.
 // - No whitelist contains other orchestration tools, so subagents cannot
 //   recurse.
-// - Nested runAgent calls receive no sessionId, so chat step persistence is
-//   never clobbered, and share the parent's AbortController so stopping the
-//   conversation stops delegated work.
-
-import { z } from 'zod'
-import { runAgent } from './agent'
-import { createTools } from './tools'
-import { logger } from './log'
 
 export const SUBAGENT_KINDS = ['researcher', 'reply-crafter', 'post-composer', 'intel-updater'] as const
 export type SubagentKind = (typeof SUBAGENT_KINDS)[number]
@@ -27,7 +22,7 @@ export type SubagentKind = (typeof SUBAGENT_KINDS)[number]
 /** Final results are pre-digested and bounded so parent context stays small. */
 export const SUBAGENT_MAX_OUTPUT_CHARS = 4000
 
-interface SubagentDefinition {
+export interface SubagentDefinition {
   label: string
   /** One-line purpose for the orchestrating model. */
   purpose: string
@@ -149,92 +144,3 @@ Rules:
 export function isSubagentKind(value: unknown): value is SubagentKind {
   return typeof value === 'string' && (SUBAGENT_KINDS as readonly string[]).includes(value)
 }
-
-function buildTaskMessage(definition: SubagentDefinition, task: string, context?: string): string {
-  return [
-    `TASK: ${task.trim()}`,
-    context?.trim() ? `\nCONTEXT FROM ORCHESTRATOR:\n${context.trim()}` : '',
-    '\nComplete this task with your tools, then produce your final structured output.',
-  ].filter(Boolean).join('\n')
-}
-
-export interface SubagentResult {
-  ok: boolean
-  kind: SubagentKind
-  /** Pre-digested final output, bounded to SUBAGENT_MAX_OUTPUT_CHARS. */
-  summary: string
-  error?: string
-}
-
-function boundOutput(text: string): string {
-  const trimmed = text.trim()
-  return trimmed.length > SUBAGENT_MAX_OUTPUT_CHARS
-    ? `${trimmed.slice(0, SUBAGENT_MAX_OUTPUT_CHARS)}…[truncated]`
-    : trimmed
-}
-
-export interface CreateSubagentToolOptions {
-  platforms?: { twitter?: boolean; reddit?: boolean }
-  /** Parent run's controller: stopping the chat stops delegated work. */
-  abortController?: AbortController
-}
-
-/**
- * Execute one subagent run. Exported separately from the tool wrapper so tests
- * can exercise resolution/bounding logic without a model.
- */
-export async function executeSubagent(
-  input: { kind: SubagentKind; task: string; context?: string },
-  options: CreateSubagentToolOptions = {},
-): Promise<SubagentResult> {
-  if (!isSubagentKind(input.kind)) {
-    return { ok: false, kind: 'researcher', summary: '', error: `Unknown subagent kind: ${String(input.kind)}` }
-  }
-  if (!input.task || !input.task.trim()) {
-    return { ok: false, kind: input.kind, summary: '', error: 'Subagent task must not be empty.' }
-  }
-
-  const definition = SUBAGENT_DEFINITIONS[input.kind]
-  const base = createTools({ platforms: options.platforms }) as Record<string, any>
-
-  // Fail closed: names outside the registry's whitelist (or unavailable for
-  // the connected platforms) simply do not resolve into the override map.
-  const tools: Record<string, any> = {}
-  for (const name of definition.tools) {
-    if (base[name]) tools[name] = base[name]
-  }
-
-  logger.info('subagents', `running ${input.kind} (${Object.keys(tools).length} tools, maxSteps ${definition.maxSteps}): ${input.task.slice(0, 80)}`)
-
-  const outcome = await new Promise<{ text: string; error?: string }>(resolve => {
-    runAgent({
-      messages: [{ role: 'user', content: buildTaskMessage(definition, input.task, input.context) }] as any,
-      onDone: text => resolve({ text }),
-      onError: error => resolve({ text: '', error }),
-      options: { maxSteps: definition.maxSteps },
-      toolsOverride: tools,
-      systemPromptOverride: definition.systemPrompt,
-      abortController: options.abortController,
-    })
-  })
-
-  if (outcome.error) {
-    logger.warn('subagents', `${input.kind} failed: ${outcome.error}`)
-    return { ok: false, kind: input.kind, summary: '', error: outcome.error }
-  }
-  if (options.abortController?.signal.aborted) {
-    return { ok: false, kind: input.kind, summary: boundOutput(outcome.text), error: 'cancelled' }
-  }
-  if (!outcome.text || !outcome.text.trim()) {
-    return { ok: false, kind: input.kind, summary: '', error: 'Subagent finished without producing output.' }
-  }
-
-  return { ok: true, kind: input.kind, summary: boundOutput(outcome.text) }
-}
-
-/** Zod schema shared by the run_subagent tool wrapper. */
-export const subagentInputSchema = z.object({
-  kind: z.enum(SUBAGENT_KINDS).describe('Which specialist to run.'),
-  task: z.string().min(1).describe('Precise, self-contained instruction for the subagent. It cannot see this conversation — include post IDs, topic keywords, subreddit/handle names, and exactly what output you need.'),
-  context: z.string().optional().describe('Optional supporting material (e.g. a research summary for the composer, prior findings for the intel updater).'),
-})

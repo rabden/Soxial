@@ -81,6 +81,8 @@ const TOOL_LABELS: Record<string, string> = {
   // Playbooks & delegation
   read_workflow_guide: "Loading playbook",
   run_subagent: "Delegating to specialist",
+  get_subagent_output: "Checking delegated task",
+  cancel_subagent: "Cancelling delegated task",
 };
 
 const UPDATE_PROFILE_NOTE =

@@ -159,6 +159,7 @@ export function toolResultPhrase(name: string, args: any, result: any): string {
       if (r.ok === false || typeof r.error === "string") {
         return r.error === "cancelled" ? "Cancelled" : (shortError(r.error) ?? "Failed");
       }
+      if (r.backgrounded) return "Running · polling";
       const phrases: Record<string, string> = {
         researcher: "Findings ready",
         "reply-crafter": "Reply drafts ready",
@@ -167,6 +168,20 @@ export function toolResultPhrase(name: string, args: any, result: any): string {
       };
       return (typeof r.kind === "string" && phrases[r.kind]) || "Done";
     }
+    case "get_subagent_output": {
+      const r = isRecord(result) ? result : {};
+      if (r.ok === false) return shortError(r.error) ?? "Unknown run";
+      switch (r.status) {
+        case "completed": return "Findings ready";
+        case "running":
+        case "queued": return "Still running";
+        case "failed": return "Failed";
+        case "timeout": return "Timed out";
+        default: return r.status === "cancelled" ? "Cancelled" : String(r.status ?? "Done");
+      }
+    }
+    case "cancel_subagent":
+      return isRecord(result) && result.ok ? "Cancelled" : "Nothing to cancel";
     default:
       break;
   }

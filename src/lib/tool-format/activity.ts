@@ -144,6 +144,10 @@ function activityFor(name: string, args: any, result: any, callOrdinal = 0): Act
         bucket: "reads",
       };
     }
+    case "get_subagent_output":
+      return { key: `${name}|${typeof a.runId === "string" ? a.runId : ""}`, text: "Checked a delegated task", bucket: "reads" };
+    case "cancel_subagent":
+      return { key: `${name}|${typeof a.runId === "string" ? a.runId : ""}`, text: "Cancelled a delegated task", bucket: "reads" };
     default:
       break;
   }
