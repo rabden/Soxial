@@ -125,8 +125,8 @@ const api = {
     return () => { ipcRenderer.off('chat:modelSwitch', listener) }
   },
 
-  getTier: () => ipcRenderer.invoke('api:getTier'),
   getAvailableModels: () => ipcRenderer.invoke('api:getAvailableModels'),
+  getModelCatalog: () => ipcRenderer.invoke('api:getModelCatalog'),
   getDefaultModel: () => ipcRenderer.invoke('api:getDefaultModel'),
   getSelectedModel: () => ipcRenderer.invoke('api:getSelectedModel'),
   setSelectedModel: (model: string) => ipcRenderer.invoke('api:setSelectedModel', model),
@@ -134,11 +134,20 @@ const api = {
   addApiKey: (apiKey: string, provider?: string) => ipcRenderer.invoke('api:addApiKey', apiKey, provider),
   removeApiKey: (id: number) => ipcRenderer.invoke('api:removeApiKey', id),
   getModelExhaustionStatus: (model: string) => ipcRenderer.invoke('api:getModelExhaustionStatus', model),
+  listCustomProviders: () => ipcRenderer.invoke('providers:list'),
+  addCustomProvider: (input: { name: string; baseUrl: string; apiKey?: string; models: Array<{ id: string; label?: string } | string> }) =>
+    ipcRenderer.invoke('providers:addCustom', input),
+  updateCustomProvider: (id: number, patch: { name?: string; baseUrl?: string; apiKey?: string; models?: Array<{ id: string; label?: string } | string> }) =>
+    ipcRenderer.invoke('providers:updateCustom', id, patch),
+  removeCustomProvider: (id: number) => ipcRenderer.invoke('providers:removeCustom', id),
+  testCustomProvider: (input: { baseUrl?: string; apiKey?: string; model?: string; providerId?: number }) =>
+    ipcRenderer.invoke('providers:testCustom', input),
   verifyCredentials: (request: {
     google?: { primary?: string; additional?: string[]; storedKeyIds?: number[] }
     zhipu?: { primary?: string; additional?: string[]; storedKeyIds?: number[]; codingPlan?: boolean }
+    openai?: { primary?: string; additional?: string[]; storedKeyIds?: number[] }
+    anthropic?: { primary?: string; additional?: string[]; storedKeyIds?: number[] }
   }) => ipcRenderer.invoke('api:verifyCredentials', request),
-  detectApiTier: (force?: boolean) => ipcRenderer.invoke('api:detectTier', force),
 
   removeAllListeners: (channel: string) => ipcRenderer.removeAllListeners(channel),
 }

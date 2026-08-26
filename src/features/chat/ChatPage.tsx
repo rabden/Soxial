@@ -101,8 +101,8 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
   const [scheduledCount, setScheduledCount] = useState(0);
   const [profileRebuilding, setProfileRebuilding] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
-  const [apiTier, setApiTier] = useState<{ tier: string } | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelLabels, setModelLabels] = useState<Record<string, string>>({});
   const [modelExhaustionStatus, setModelExhaustionStatus] = useState<Record<string, { exhausted: boolean; availableAt: string | null }>>({});
 
   const getOrCreateSessionState = (sid: number, initialMsgs: ChatMessage[] = []): SessionState => {
@@ -240,12 +240,12 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
 
   async function loadApiInfo() {
     try {
-      const tier = await window.api.getTier();
-      setApiTier(tier);
-      
-      const models = await window.api.getAvailableModels();
+      // Label-aware catalog: every model of every configured provider.
+      const catalog = await window.api.getModelCatalog();
+      const models = catalog.map(entry => entry.id);
       setAvailableModels(models);
-      
+      setModelLabels(Object.fromEntries(catalog.map(entry => [entry.id, entry.label])));
+
       // Load persisted model preference, fall back to default if not available
       const persisted = await window.api.getSelectedModel();
       if (persisted && models.includes(persisted)) {
@@ -1190,6 +1190,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                       : "Message Soxial..."
                   }
                   models={availableModels.length > 0 ? availableModels : ["gemini-3.5-flash-lite"]}
+                  modelLabels={modelLabels}
                   model={selectedModel}
                   modelSupportsEffort={(model) => model !== "gemini-3.1-pro" && !model.startsWith("glm")}
                   isStreaming={streaming}

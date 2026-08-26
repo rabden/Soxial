@@ -6,7 +6,7 @@ import { seedDatabase } from './seed'
 import { logger } from './log'
 import { credentialFingerprint, deleteCredential, getCredential, saveCredential } from './credentials'
 import { runMigrations } from './db-migrations'
-import { normalizeModelId, requiredTierFor } from './models'
+import { normalizeModelId, parseModelRef, customModelId, OPENAI_MODEL_CATALOG, ANTHROPIC_MODEL_CATALOG } from './models'
 
 let db: Database.Database | null = null
 
@@ -250,6 +250,16 @@ function initSchema(db: Database.Database) {
       ON model_exhaustion(available_at);
     CREATE INDEX IF NOT EXISTS idx_api_keys_active
       ON api_keys(is_active);
+
+    CREATE TABLE IF NOT EXISTS custom_providers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      credential_ref TEXT,
+      models_json TEXT NOT NULL DEFAULT '[]',
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
   `)
   runMigrations(db)
 
@@ -545,14 +555,21 @@ export function updateChatSessionSteps(sessionId: number, steps: any[], userCoun
 export function getProfile() {
   const profile = getDb().prepare('SELECT * FROM user_profile WHERE id = 1').get() as any
   if (!profile) return profile
-  for (const [field, provider] of [['gemini_api_key', 'google'], ['zai_api_key', 'zhipu']]) {
+  for (const [field, provider] of [
+    ['gemini_api_key', 'google'],
+    ['zai_api_key', 'zhipu'],
+    ['openai_api_key', 'openai'],
+    ['anthropic_api_key', 'anthropic'],
+  ] as const) {
     const row = getDb().prepare("SELECT credential_ref, api_key FROM api_keys WHERE provider = ? AND name = 'Primary' AND is_active = 1 ORDER BY id DESC LIMIT 1").get(provider) as any
     profile[field] = row ? (getCredential(row.credential_ref) || row.api_key || null) : null
   }
   return profile
 }
 
-export function syncPrimaryKeyToApiKeys(apiKey: string, provider: 'google' | 'zhipu' = 'google'): void {
+export type HostedKeyProvider = 'google' | 'zhipu' | 'openai' | 'anthropic'
+
+export function syncPrimaryKeyToApiKeys(apiKey: string, provider: HostedKeyProvider = 'google'): void {
   const db = getDb()
 
   // If the exact key already exists and is active, just rename it to Primary
@@ -590,9 +607,13 @@ export function updateProfile(data: Record<string, any>) {
   }
   if (data.gemini_api_key) syncPrimaryKeyToApiKeys(data.gemini_api_key, 'google')
   if (data.zai_api_key) syncPrimaryKeyToApiKeys(data.zai_api_key, 'zhipu')
+  if (data.openai_api_key) syncPrimaryKeyToApiKeys(data.openai_api_key, 'openai')
+  if (data.anthropic_api_key) syncPrimaryKeyToApiKeys(data.anthropic_api_key, 'anthropic')
   const profileData = { ...data }
   delete profileData.gemini_api_key
   delete profileData.zai_api_key
+  delete profileData.openai_api_key
+  delete profileData.anthropic_api_key
   const keys = Object.keys(profileData).filter(k => profileData[k] !== undefined)
   const sets = keys.map(k => `${k} = @${k}`).join(', ')
   if (sets) {
@@ -959,60 +980,47 @@ export function countSocialContent(options?: { platform?: string; content_type?:
   return getDb().prepare(sql).all(...params)
 }
 
-// API Tier Management
-export function getApiTier(): { tier: string; detected_at: string; last_verified_at?: string } {
-  const db = getDb()
-  const row = db.prepare('SELECT * FROM api_tier_info WHERE id = 1').get() as any
-  if (!row) {
-    db.prepare('INSERT INTO api_tier_info (id, tier) VALUES (1, ?)').run('free')
-    return { tier: 'free', detected_at: new Date().toISOString() }
-  }
-  return row
-}
-
-export function setApiTier(tier: 'free' | 'pro') {
-  const db = getDb()
-  db.prepare('UPDATE api_tier_info SET tier = ?, last_verified_at = datetime(\'now\') WHERE id = 1').run(tier)
-  return getApiTier()
-}
-
-export function getAvailableModels(tier?: string): string[] {
+export function getAvailableModels(): string[] {
   const db = getDb()
   const models: string[] = []
   const profile = getProfile()
 
-  // 1. Evaluate Google models
+  // 1. Google models (full catalog — no tier gating; exhaustion cooldowns are
+  // handled at attempt time).
   const googleKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'google\' AND is_active = 1').get() as any
   if (googleKeys.count > 0) {
-    const proGoogleKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'google\' AND tier = \'pro\' AND is_active = 1').get() as any
-    if (proGoogleKeys.count > 0) {
-      models.push('gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite')
-    } else {
-      models.push('gemini-3.5-flash-lite', 'gemini-3.7-flash')
-    }
+    models.push('gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite')
   }
 
-  // 2. Evaluate Z.AI (Zhipu) models
+  // 2. Z.AI (Zhipu) models
   const zhipuKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'zhipu\' AND is_active = 1').get() as any
   if (zhipuKeys.count > 0) {
     if (profile?.zai_coding_plan) {
-      // Coding plan: always pro tier, only supports glm-5.3 + glm-5-turbo (no flash models)
+      // Coding plan endpoints only serve the coding models.
       models.push('glm-5.3', 'glm-5-turbo')
     } else {
-      const proZhipuKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'zhipu\' AND tier = \'pro\' AND is_active = 1').get() as any
-      if (proZhipuKeys.count > 0) {
-        models.push('glm-5.3', 'glm-5-turbo', 'glm-4.7-flash', 'glm-4.5-flash')
-      } else {
-        models.push('glm-4.7-flash', 'glm-4.5-flash')
-      }
+      models.push('glm-5.3', 'glm-5-turbo', 'glm-4.7-flash', 'glm-4.5-flash')
     }
+  }
+
+  // 3. Evaluate OpenAI / Anthropic / user-defined OpenAI-compatible endpoints.
+  const openaiKeys = db.prepare("SELECT COUNT(*) as count FROM api_keys WHERE provider = 'openai' AND is_active = 1").get() as any
+  if (openaiKeys.count > 0) {
+    for (const m of OPENAI_MODEL_CATALOG) models.push(`openai/${m.id}`)
+  }
+  const anthropicKeys = db.prepare("SELECT COUNT(*) as count FROM api_keys WHERE provider = 'anthropic' AND is_active = 1").get() as any
+  if (anthropicKeys.count > 0) {
+    for (const m of ANTHROPIC_MODEL_CATALOG) models.push(`anthropic/${m.id}`)
+  }
+  for (const provider of listActiveCustomProviders()) {
+    for (const m of provider.models) models.push(customModelId(provider.id, m.id))
   }
 
   return models
 }
 
-export function getDefaultModel(tier?: string): string {
-  const models = getAvailableModels(tier)
+export function getDefaultModel(): string {
+  const models = getAvailableModels()
   if (models.includes('gemini-3.7-flash')) return 'gemini-3.7-flash'
   if (models.includes('glm-4.7-flash')) return 'glm-4.7-flash'
   return models[0] || 'gemini-3.5-flash-lite'
@@ -1030,6 +1038,12 @@ export function setSelectedModel(model: string): void {
 }
 
 // ─── API Key Management ───────────────────────────────────────────
+
+/** api_keys.provider value serving a model id ('google'|'zhipu'|'openai'|'anthropic'). */
+function apiKeyProviderName(model: string): string {
+  return parseModelRef(model).kind
+}
+
 
 export function getApiKeys(provider: string = 'google'): Array<{ id: number; name: string; api_key: string; provider: string; tier: string; is_active: number; created_at: string; last_used_at: string | null }> {
   const db = getDb()
@@ -1076,24 +1090,152 @@ export function updateApiKeyTier(id: number, tier: 'free' | 'pro'): void {
   db.prepare('UPDATE api_keys SET tier = ? WHERE id = ?').run(tier, id)
 }
 
+// ─── Custom OpenAI-compatible providers ─────────────────────────────────────
+
+export interface CustomProviderModel { id: string; label: string }
+export interface CustomProvider {
+  id: number
+  name: string
+  baseUrl: string
+  models: CustomProviderModel[]
+  isActive: boolean
+  createdAt: string
+}
+/** Same shape plus the resolved credential — never leaves the main process. */
+export interface CustomProviderCredential extends CustomProvider {
+  apiKey: string
+}
+
+function parseCustomModels(modelsJson: string): CustomProviderModel[] {
+  try {
+    const parsed = JSON.parse(modelsJson)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((m: any) => m && typeof m.id === 'string' && m.id.trim())
+      .map((m: any) => ({ id: String(m.id).trim(), label: typeof m.label === 'string' && m.label.trim() ? m.label.trim() : String(m.id).trim() }))
+  } catch {
+    return []
+  }
+}
+
+function rowToCustomProvider(row: any): CustomProvider {
+  return {
+    id: row.id,
+    name: row.name,
+    baseUrl: row.base_url,
+    models: parseCustomModels(row.models_json),
+    isActive: row.is_active === 1,
+    createdAt: row.created_at,
+  }
+}
+
+export function listCustomProviders(includeInactive = false): CustomProvider[] {
+  const db = getDb()
+  const rows = includeInactive
+    ? db.prepare('SELECT * FROM custom_providers ORDER BY created_at ASC').all()
+    : db.prepare('SELECT * FROM custom_providers WHERE is_active = 1 ORDER BY created_at ASC').all()
+  return (rows as any[]).map(rowToCustomProvider)
+}
+
+export function listActiveCustomProviders(): CustomProvider[] {
+  return listCustomProviders(false)
+}
+
+export function getCustomProviderCredential(id: number): CustomProviderCredential | null {
+  const db = getDb()
+  const row = db.prepare('SELECT * FROM custom_providers WHERE id = ? AND is_active = 1').get(id) as any
+  if (!row) return null
+  const apiKey = (row.credential_ref && getCredential(row.credential_ref)) || ''
+  return { ...rowToCustomProvider(row), apiKey }
+}
+
+export function addCustomProvider(input: {
+  name: string
+  baseUrl: string
+  apiKey?: string
+  models: CustomProviderModel[]
+}): number {
+  const db = getDb()
+  const result = db.prepare(
+    'INSERT INTO custom_providers (name, base_url, credential_ref, models_json) VALUES (?, ?, ?, ?)',
+  ).run(input.name.trim(), input.baseUrl.trim().replace(/\/+$/, ''), '', JSON.stringify(input.models))
+  const id = result.lastInsertRowid as number
+  if (input.apiKey?.trim()) {
+    const ref = `custom-provider-${id}`
+    saveCredential(ref, input.apiKey.trim())
+    db.prepare('UPDATE custom_providers SET credential_ref = ? WHERE id = ?').run(ref, id)
+  }
+  logger.info('db', `added custom provider "${input.name}" (${input.baseUrl}) with ${input.models.length} model(s)`)
+  return id
+}
+
+export function updateCustomProvider(id: number, patch: {
+  name?: string
+  baseUrl?: string
+  /** Omit to keep the existing credential; empty string clears it. */
+  apiKey?: string
+  models?: CustomProviderModel[]
+}): boolean {
+  const db = getDb()
+  const existing = db.prepare('SELECT * FROM custom_providers WHERE id = ?').get(id) as any
+  if (!existing) return false
+
+  const name = patch.name?.trim() || existing.name
+  const baseUrl = (patch.baseUrl?.trim().replace(/\/+$/, '')) || existing.base_url
+  const modelsJson = patch.models ? JSON.stringify(patch.models) : existing.models_json
+
+  let credentialRef: string | null = null
+  if (patch.apiKey !== undefined) {
+    if (patch.apiKey.trim()) {
+      const ref = existing.credential_ref || `custom-provider-${id}`
+      saveCredential(ref, patch.apiKey.trim())
+      credentialRef = ref
+    } else {
+      if (existing.credential_ref) deleteCredential(existing.credential_ref)
+      credentialRef = ''
+    }
+  }
+
+  db.prepare(
+    'UPDATE custom_providers SET name = ?, base_url = ?, models_json = ?' +
+    (credentialRef !== null ? ', credential_ref = ?' : '') +
+    ' WHERE id = ?',
+  ).run(...(credentialRef !== null ? [name, baseUrl, modelsJson, credentialRef, id] : [name, baseUrl, modelsJson, id]))
+  return true
+}
+
+export function removeCustomProvider(id: number): boolean {
+  const db = getDb()
+  const row = db.prepare('SELECT credential_ref FROM custom_providers WHERE id = ?').get(id) as any
+  if (!row) return false
+  db.prepare('UPDATE custom_providers SET is_active = 0 WHERE id = ?').run(id)
+  if (row.credential_ref) deleteCredential(row.credential_ref)
+  logger.info('db', `removed custom provider #${id}`)
+  return true
+}
+
+/** Active-key count per api_keys provider family ('google'|'zhipu'|'openai'|'anthropic'). */
+export function getActiveKeyCountForProvider(provider: string): number {
+  return (getDb().prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = ? AND is_active = 1').get(provider) as any).count
+}
+
 export function getApiKeysByTier(tier: 'free' | 'pro', provider: string = 'google'): Array<{ id: number; name: string; api_key: string; tier: string; is_active: number; created_at: string; last_used_at: string | null }> {
   const db = getDb()
   return (db.prepare('SELECT * FROM api_keys WHERE provider = ? AND tier = ? AND is_active = 1 ORDER BY created_at ASC').all(provider, tier) as any[])
     .map(row => ({ ...row, api_key: getCredential(row.credential_ref) || row.api_key || '' }))
 }
 
-export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' | 'pro', excludeApiKeyIds?: number[]): { id: number; api_key: string } | null {
+export function getAvailableApiKeyForModel(model: string, excludeApiKeyIds?: number[]): { id: number; api_key: string } | null {
   const raw = model
   model = normalizeModelId(raw)
   if (raw !== model) logger.warn('db', `normalized legacy model id ${raw} -> ${model}`)
+  // Custom endpoints keep their credential on their own row — resolved by
+  // getCustomProviderCredential, never through api_keys rotation.
+  if (parseModelRef(model).kind === 'custom') return null
   const db = getDb()
   const now = new Date().toISOString()
-  const provider = model.startsWith('glm') ? 'zhipu' : 'google'
+  const provider = apiKeyProviderName(model)
 
-  // Determine required tier based on model
-  const tierFilter = requiredTier ?? requiredTierFor(model) ?? null
-
-  // Build query with optional tier filter
   let query = `
     SELECT id, credential_ref, api_key
     FROM api_keys
@@ -1109,11 +1251,6 @@ export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' 
   `
   const params: any[] = [provider, model, now]
 
-  if (tierFilter) {
-    query += ' AND tier = ?'
-    params.push(tierFilter)
-  }
-
   // Exclude already-tried keys (for rotation across keys on the same model).
   const triedIds = (excludeApiKeyIds || []).filter(id => id != null)
   if (triedIds.length > 0) {
@@ -1125,7 +1262,7 @@ export function getAvailableApiKeyForModel(model: string, requiredTier?: 'free' 
 
   const availableKeys = db.prepare(query).all(...params) as any[]
 
-  logger.info('db', `getAvailableApiKeyForModel for ${model} (provider ${provider}): found ${availableKeys.length} keys (exclude: ${JSON.stringify(triedIds)}, tier: ${tierFilter})`)
+  logger.info('db', `getAvailableApiKeyForModel for ${model} (provider ${provider}): found ${availableKeys.length} keys (exclude: ${JSON.stringify(triedIds)})`)
 
   if (availableKeys.length === 0) {
     return null
@@ -1155,36 +1292,19 @@ export function markModelExhausted(model: string, apiKeyId: number | null): void
   logger.info('db', `marked model ${model} as exhausted for ${keyLabel} until ${availableAt.toISOString()}`)
 }
 
-export function isModelExhaustedForAllKeys(model: string, requiredTier?: 'free' | 'pro'): boolean {
+export function isModelExhaustedForAllKeys(model: string): boolean {
   const raw = model
   model = normalizeModelId(raw)
   if (raw !== model) logger.warn('db', `normalized legacy model id ${raw} -> ${model}`)
+  // Custom endpoints have a single dedicated credential with no rotation pool,
+  // so the all-keys-exhausted concept does not apply.
+  if (parseModelRef(model).kind === 'custom') return false
   const db = getDb()
   const now = new Date().toISOString()
-  const provider = model.startsWith('glm') ? 'zhipu' : 'google'
+  const provider = apiKeyProviderName(model)
 
-  // Determine required tier based on model
-  const tierFilter = requiredTier ?? requiredTierFor(model) ?? null
-  
-  // If tier is specified, only check keys of that tier for the relevant provider
-  if (tierFilter) {
-    const tierKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE is_active = 1 AND provider = ? AND tier = ?').get(provider, tierFilter) as any
-    if (tierKeys.count === 0) return false
-    
-    const exhaustedTierKeys = db.prepare(`
-      SELECT COUNT(DISTINCT api_key_id) as count 
-      FROM model_exhaustion 
-      WHERE model = ? 
-      AND available_at > ?
-      AND api_key_id IS NOT NULL
-      AND api_key_id IN (SELECT id FROM api_keys WHERE tier = ? AND provider = ? AND is_active = 1)
-    `).get(model, now, tierFilter, provider) as any
-    
-    return exhaustedTierKeys.count >= tierKeys.count
-  }
-  
-  // Non-tier path: the primary key is synced into api_keys (see syncPrimaryKeyToApiKeys
-  // + the startup migration), so activeKeysCount already includes it — don't add it again.
+  // The primary key is synced into api_keys (see syncPrimaryKeyToApiKeys
+  // + the startup migration), so activeKeysCount already includes it.
   const activeKeysCount = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE is_active = 1 AND provider = ?').get(provider) as any
   const totalKeys = activeKeysCount.count
   if (totalKeys === 0) return false

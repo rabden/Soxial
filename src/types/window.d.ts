@@ -68,8 +68,8 @@ interface Window {
     onChatTransientRetry: (cb: (info: { attempt: number; maxAttempts: number; backoffMs: number; model: string; sessionId: number }) => void) => () => void
     onChatInjected: (cb: (data: { messages: any[]; sessionId: number }) => void) => () => void
     onChatModelSwitch: (cb: (data: { model: string; sessionId: number }) => void) => () => void
-    getTier: () => Promise<{ tier: string }>
     getAvailableModels: () => Promise<string[]>
+    getModelCatalog: () => Promise<Array<{ id: string; label: string }>>
     getDefaultModel: () => Promise<string>
     getSelectedModel: () => Promise<string | null>
     setSelectedModel: (model: string) => Promise<void>
@@ -77,15 +77,21 @@ interface Window {
     addApiKey: (apiKey: string, provider?: string) => Promise<number>
     removeApiKey: (id: number) => Promise<void>
     getModelExhaustionStatus: (model: string) => Promise<{ exhausted: boolean; availableAt: string | null }>
+    listCustomProviders: () => Promise<Array<{ id: number; name: string; baseUrl: string; models: Array<{ id: string; label: string }>; isActive: boolean; createdAt: string; hasKey: boolean; keyMasked: string | null }>>
+    addCustomProvider: (input: { name: string; baseUrl: string; apiKey?: string; models: Array<{ id: string; label?: string } | string> }) => Promise<{ id: number }>
+    updateCustomProvider: (id: number, patch: { name?: string; baseUrl?: string; apiKey?: string; models?: Array<{ id: string; label?: string } | string> }) => Promise<boolean>
+    removeCustomProvider: (id: number) => Promise<boolean>
+    testCustomProvider: (input: { baseUrl?: string; apiKey?: string; model?: string; providerId?: number }) => Promise<{ ok: boolean; sample?: string; error?: string }>
     verifyCredentials: (request: {
       google?: { primary?: string; additional?: string[]; storedKeyIds?: number[] }
       zhipu?: { primary?: string; additional?: string[]; storedKeyIds?: number[]; codingPlan?: boolean }
+      openai?: { primary?: string; additional?: string[]; storedKeyIds?: number[] }
+      anthropic?: { primary?: string; additional?: string[]; storedKeyIds?: number[] }
     }) => Promise<{
       ok: boolean
-      tier: 'free' | 'pro' | 'unknown'
       message: string
       results: Array<{
-        provider: 'google' | 'zhipu'
+        provider: 'google' | 'zhipu' | 'openai' | 'anthropic'
         slot: 'primary' | 'additional' | 'stored'
         index?: number
         id?: number
@@ -95,7 +101,6 @@ interface Window {
         masked: string | null
       }>
     }>
-    detectApiTier: (force?: boolean) => Promise<'free' | 'pro'>
     removeAllListeners: (channel: string) => void
   }
 }

@@ -477,25 +477,41 @@ function StepAccountAnalysisInfo({ formData, update, onBack, onNext }: any) {
   )
 }
 
+type OnboardingProviderId = 'google' | 'zhipu' | 'openai' | 'anthropic'
+
+const STEP_API_TABS: Array<{ id: OnboardingProviderId; label: string }> = [
+  { id: 'google', label: 'Google' },
+  { id: 'zhipu', label: 'Z.AI' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'anthropic', label: 'Anthropic' },
+]
+
 function StepApiKey({ formData, update, onBack, onNext }: any) {
-  const [activeTab, setActiveTab] = useState<'google' | 'zhipu'>('google')
-  const [primaryGoogleKey, setPrimaryGoogleKey] = useState(formData.gemini_api_key || '')
-  const [primaryZhipuKey, setPrimaryZhipuKey] = useState(formData.zai_api_key || '')
-  const [googleExtras, setGoogleExtras] = useState<Array<{ id?: number; value: string; masked?: string }>>([])
-  const [zhipuExtras, setZhipuExtras] = useState<Array<{ id?: number; value: string; masked?: string }>>([])
+  const [activeTab, setActiveTab] = useState<OnboardingProviderId>('google')
+  const [primaryKeys, setPrimaryKeys] = useState<Record<OnboardingProviderId, string>>({
+    google: formData.gemini_api_key || '',
+    zhipu: formData.zai_api_key || '',
+    openai: formData.openai_api_key || '',
+    anthropic: formData.anthropic_api_key || '',
+  })
+  const [extraKeys, setExtraKeys] = useState<Record<OnboardingProviderId, Array<{ id?: number; value: string; masked?: string | null }>>>({
+    google: [], zhipu: [], openai: [], anthropic: [],
+  })
   const [codingPlan, setCodingPlan] = useState(formData.zai_coding_plan === 1)
   const [saving, setSaving] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verificationStage, setVerificationStage] = useState<string>('')
-  const [verificationError, setVerificationError] = useState<{ provider: 'google' | 'zhipu'; message: string } | null>(null)
+  const [verificationError, setVerificationError] = useState<{ provider: OnboardingProviderId; message: string } | null>(null)
 
   useEffect(() => {
-    window.api.getApiKeys('google').then((keys: any[]) => {
-      setGoogleExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })))
-    })
-    window.api.getApiKeys('zhipu').then((keys: any[]) => {
-      setZhipuExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })))
-    })
+    for (const tab of STEP_API_TABS) {
+      window.api.getApiKeys(tab.id).then((keys: any[]) => {
+        setExtraKeys(prev => ({
+          ...prev,
+          [tab.id]: (keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })),
+        }))
+      })
+    }
   }, [])
 
   const handleContinue = async () => {
@@ -508,19 +524,20 @@ function StepApiKey({ formData, update, onBack, onNext }: any) {
     setVerificationStage('Checking your AI provider credentials…')
 
     try {
-      const request = {
-        google: {
-          primary: primaryGoogleKey.trim() || undefined,
-          additional: googleExtras.filter(e => !e.id && e.value.trim()).map(e => e.value.trim()),
-          storedKeyIds: googleExtras.filter(e => e.id).map(e => e.id as number),
-        },
-        zhipu: {
-          primary: primaryZhipuKey.trim() || undefined,
-          additional: zhipuExtras.filter(e => !e.id && e.value.trim()).map(e => e.value.trim()),
-          storedKeyIds: zhipuExtras.filter(e => e.id).map(e => e.id as number),
-          codingPlan,
-        },
+      // Verify only providers the user actually touched: a section with a
+      // primary key, a new backup key, or stored keys up for re-verification.
+      const request: Record<string, { primary?: string; additional?: string[]; storedKeyIds?: number[]; codingPlan?: boolean }> = {}
+      for (const { id } of STEP_API_TABS) {
+        const section: typeof request[string] = {
+          primary: primaryKeys[id].trim() || undefined,
+          additional: extraKeys[id].filter(e => !e.id && e.value.trim()).map(e => e.value.trim()),
+          storedKeyIds: extraKeys[id].filter(e => e.id).map(e => e.id as number),
+        }
+        if (section.primary || (section.additional?.length ?? 0) > 0 || (section.storedKeyIds?.length ?? 0) > 0) {
+          request[id] = section
+        }
       }
+      if (request.zhipu) request.zhipu.codingPlan = codingPlan
 
       const report = await window.api.verifyCredentials(request)
 
@@ -554,40 +571,107 @@ function StepApiKey({ formData, update, onBack, onNext }: any) {
     setSaving(true)
     try {
       await window.api.updateProfile({
-        gemini_api_key: primaryGoogleKey.trim(),
-        zai_api_key: primaryZhipuKey.trim(),
+        gemini_api_key: primaryKeys.google.trim(),
+        zai_api_key: primaryKeys.zhipu.trim(),
+        openai_api_key: primaryKeys.openai.trim(),
+        anthropic_api_key: primaryKeys.anthropic.trim(),
         zai_coding_plan: codingPlan ? 1 : 0,
       })
 
-      // Persist Google backup keys
-      const existingGoogle = ((await window.api.getApiKeys('google')) as any[]).filter(k => k.name !== 'Primary')
-      const keptGoogleIds = new Set(googleExtras.filter(e => e.id).map(e => e.id))
-      for (const k of existingGoogle) {
-        if (!keptGoogleIds.has(k.id)) await window.api.removeApiKey(k.id)
-      }
-      for (const e of googleExtras) {
-        if (!e.id && e.value.trim()) await window.api.addApiKey(e.value.trim(), 'google')
-      }
-
-      // Persist Zhipu backup keys
-      const existingZhipu = ((await window.api.getApiKeys('zhipu')) as any[]).filter(k => k.name !== 'Primary')
-      const keptZhipuIds = new Set(zhipuExtras.filter(e => e.id).map(e => e.id))
-      for (const k of existingZhipu) {
-        if (!keptZhipuIds.has(k.id)) await window.api.removeApiKey(k.id)
-      }
-      for (const e of zhipuExtras) {
-        if (!e.id && e.value.trim()) await window.api.addApiKey(e.value.trim(), 'zhipu')
+      // Persist backup keys per provider: add new rows, drop removed ones.
+      for (const { id } of STEP_API_TABS) {
+        const extras = extraKeys[id]
+        const existing = ((await window.api.getApiKeys(id)) as any[]).filter(k => k.name !== 'Primary')
+        const keptIds = new Set(extras.filter(e => e.id).map(e => e.id))
+        for (const k of existing) {
+          if (!keptIds.has(k.id)) await window.api.removeApiKey(k.id)
+        }
+        for (const e of extras) {
+          if (!e.id && e.value.trim()) await window.api.addApiKey(e.value.trim(), id)
+        }
       }
 
-      update('gemini_api_key', primaryGoogleKey.trim())
-      update('zai_api_key', primaryZhipuKey.trim())
+      update('gemini_api_key', primaryKeys.google.trim())
+      update('zai_api_key', primaryKeys.zhipu.trim())
       update('zai_coding_plan', codingPlan ? 1 : 0)
     } finally {
       setSaving(false)
     }
   }
 
-  const hasAnyKey = primaryGoogleKey.trim() || primaryZhipuKey.trim() || googleExtras.some(e => e.value.trim()) || zhipuExtras.some(e => e.value.trim())
+  const hasAnyKey = STEP_API_TABS.some(({ id }) => primaryKeys[id].trim() || extraKeys[id].some(e => e.value.trim()))
+
+  // One panel shape for every hosted provider, matching the Settings page.
+  const renderStepPanel = (provider: OnboardingProviderId) => (
+    <div className="space-y-4">
+      <Input
+        label={undefined}
+        value={primaryKeys[provider]}
+        onChange={(v: string) => setPrimaryKeys(prev => ({ ...prev, [provider]: v.trim() }))}
+        placeholder="Paste your API key"
+        type="password"
+        icon={KeyRound}
+      />
+
+      {provider === 'zhipu' && (
+        <div className="flex items-center justify-between p-5 rounded-2xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] shadow-sm transition-colors">
+          <div>
+            <div className="text-xs font-semibold text-white tracking-tight">Coding plan API</div>
+            <div className="text-[10px] text-zinc-500 font-medium mt-0.5">Enable if your api is a Coding plan api key</div>
+          </div>
+          <button
+            onClick={() => setCodingPlan(!codingPlan)}
+            className={cn(
+              "w-11 h-6 rounded-full relative p-0.5 transition-colors duration-300 flex items-center border shadow-[inset_0_1px_2px_rgba(0,0,0,0.4)]",
+              codingPlan
+                ? "bg-blue-600 border-blue-500/10"
+                : "bg-[#0c0c0f] border-white/[0.04]"
+            )}
+          >
+            <motion.span
+              layout
+              transition={toggleSpring}
+              className="size-5 rounded-full bg-white shadow-md block"
+              style={{ marginLeft: codingPlan ? 'auto' : '0px' }}
+            />
+          </button>
+        </div>
+      )}
+
+      {extraKeys[provider].map((k, i) => (
+        <div key={k.id ?? `new-${provider}-${i}`} className="flex gap-2 items-end">
+          <div className="flex-1">
+            <Input
+              label={undefined}
+              value={k.value}
+              onChange={(v: string) => setExtraKeys(prev => ({ ...prev, [provider]: prev[provider].map((item, idx) => idx === i ? { ...item, value: v } : item) }))}
+              placeholder="Paste your backup API key"
+              type="password"
+              icon={KeyRound}
+            />
+          </div>
+          <Button
+            type="button"
+            variant="destructive"
+            size="icon"
+            shape="square"
+            scaleOnPress
+            depthShadow
+            onClick={() => setExtraKeys(prev => ({ ...prev, [provider]: prev[provider].filter((_, idx) => idx !== i) }))}
+            aria-label="Remove key"
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        </div>
+      ))}
+      <button
+        onClick={() => setExtraKeys(prev => ({ ...prev, [provider]: [...prev[provider], { value: '' }] }))}
+        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
+      >
+        <Plus className="size-3.5" /> Add backup key
+      </button>
+    </div>
+  )
 
   return (
     <div className="space-y-10">
@@ -598,170 +682,39 @@ function StepApiKey({ formData, update, onBack, onNext }: any) {
       <motion.div variants={childVariants} className="mx-auto w-full max-w-[480px]">
         <div className="space-y-6">
           {/* Sliding Tab Selector */}
-          <div className="mx-auto flex w-full max-w-[260px] rounded-xl border border-input/60 bg-card p-1 relative">
-            <button
-              onClick={() => setActiveTab('google')}
-              className={cn(
-                "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
-                activeTab === 'google' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              {activeTab === 'google' && (
-                <motion.span 
-                  layoutId="activeTabBackdropOnboarding"
-                  className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
-                  transition={springTransition}
-                />
-              )}
-              Google
-            </button>
-            <button
-              onClick={() => setActiveTab('zhipu')}
-              className={cn(
-                "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
-                activeTab === 'zhipu' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              {activeTab === 'zhipu' && (
-                <motion.span 
-                  layoutId="activeTabBackdropOnboarding"
-                  className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
-                  transition={springTransition}
-                />
-              )}
-              Z.AI
-            </button>
+          <div className="mx-auto flex w-full max-w-[420px] rounded-xl border border-input/60 bg-card p-1 relative">
+            {STEP_API_TABS.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
+                  activeTab === tab.id ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+                )}
+              >
+                {activeTab === tab.id && (
+                  <motion.span
+                    layoutId="activeTabBackdropOnboarding"
+                    className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
+                    transition={springTransition}
+                  />
+                )}
+                {tab.label}
+              </button>
+            ))}
           </div>
 
           <div>
             <AnimatePresence mode="wait">
-              {activeTab === 'google' ? (
-                <motion.div 
-                  key="google"
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.2 }}
-                  className="space-y-4"
-                >
-                  <Input
-                    label={undefined}
-                    value={primaryGoogleKey}
-                    onChange={(v: string) => setPrimaryGoogleKey(v.trim())}
-                    placeholder="Paste your API key"
-                    type="password"
-                    icon={KeyRound}
-                  />
-                  {googleExtras.map((k, i) => (
-                    <div key={k.id ?? `new-g-${i}`} className="flex gap-2 items-end">
-                      <div className="flex-1">
-                        <Input
-                          label={undefined}
-                          value={k.value}
-                          onChange={(v: string) => setGoogleExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: v } : item))}
-                          placeholder="Paste your backup API key"
-                          type="password"
-                          icon={KeyRound}
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="icon"
-                        shape="square"
-                        scaleOnPress
-                        depthShadow
-                        onClick={() => setGoogleExtras(prev => prev.filter((_, idx) => idx !== i))}
-                        aria-label="Remove key"
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  ))}
-                  <button
-                    onClick={() => setGoogleExtras(prev => [...prev, { value: '' }])}
-                    className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
-                  >
-                    <Plus className="size-3.5" /> Add backup Google key
-                  </button>
-                </motion.div>
-              ) : (
-                <motion.div 
-                  key="zhipu"
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
-                  transition={{ duration: 0.2 }}
-                  className="space-y-6"
-                >
-                  <Input
-                    label={undefined}
-                    value={primaryZhipuKey}
-                    onChange={(v: string) => setPrimaryZhipuKey(v.trim())}
-                    placeholder="Paste your API key"
-                    type="password"
-                    icon={KeyRound}
-                  />
-
-                  {/* Coding Plan Mode */}
-                  <div className="flex items-center justify-between p-5 rounded-2xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] shadow-sm transition-colors">
-                    <div>
-                      <div className="text-xs font-semibold text-white tracking-tight">Coding plan API</div>
-                      <div className="text-[10px] text-zinc-500 font-medium mt-0.5">Enable if your api is a Coding plan api key</div>
-                    </div>
-                    {/* Apple style physical switch */}
-                    <button
-                      onClick={() => setCodingPlan(!codingPlan)}
-                      className={cn(
-                        "w-11 h-6 rounded-full relative p-0.5 transition-colors duration-300 flex items-center border shadow-[inset_0_1px_2px_rgba(0,0,0,0.4)]",
-                        codingPlan 
-                          ? "bg-blue-600 border-blue-500/10" 
-                          : "bg-[#0c0c0f] border-white/[0.04]"
-                      )}
-                    >
-                      <motion.span 
-                        layout
-                        transition={toggleSpring}
-                        className="size-5 rounded-full bg-white shadow-md block" 
-                        style={{ marginLeft: codingPlan ? 'auto' : '0px' }}
-                      />
-                    </button>
-                  </div>
-
-                  {zhipuExtras.map((k, i) => (
-                    <div key={k.id ?? `new-z-${i}`} className="flex gap-2 items-end">
-                      <div className="flex-1">
-                        <Input
-                          label={undefined}
-                          value={k.value}
-                          onChange={(v: string) => setZhipuExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: v } : item))}
-                          placeholder="Paste your backup API key"
-                          type="password"
-                          icon={KeyRound}
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="icon"
-                        shape="square"
-                        scaleOnPress
-                        depthShadow
-                        onClick={() => setZhipuExtras(prev => prev.filter((_, idx) => idx !== i))}
-                        aria-label="Remove key"
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  ))}
-                  <button
-                    onClick={() => setZhipuExtras(prev => [...prev, { value: '' }])}
-                    className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
-                  >
-                    <Plus className="size-3.5" /> Add backup Z.AI key
-                  </button>
-                </motion.div>
-              )}
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.2 }}
+              >
+                {renderStepPanel(activeTab)}
+              </motion.div>
             </AnimatePresence>
           </div>
         </div>
@@ -778,7 +731,7 @@ function StepApiKey({ formData, update, onBack, onNext }: any) {
             className="mx-auto w-full max-w-[480px] rounded-xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3"
           >
             <p className="text-xs font-semibold text-red-300">
-              {verificationError.provider === 'google' ? 'Google' : 'Z.AI'} verification failed
+              {STEP_API_TABS.find(t => t.id === verificationError.provider)?.label ?? 'Provider'} verification failed
             </p>
             <p className="mt-1 text-xs leading-relaxed text-red-200/80">{verificationError.message}</p>
           </motion.div>

@@ -1,7 +1,7 @@
 import { streamText, generateText as aiGenerateText, isStepCount } from 'ai'
-import { createGoogle } from '@ai-sdk/google'
-import { getProfile, getApiTier, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb } from './db'
-import { normalizeModelId, requiredTierFor } from './models'
+import { getProfile, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb, getCustomProviderCredential } from './db'
+import { normalizeModelId, parseModelRef } from './models'
+import { createModelInstance, buildChatFallbackChain } from './providers'
 import { createTools } from './tools'
 import { SAFE_CAPABILITIES, filterToolsByCapability, listDeniedTools } from './tool-capabilities'
 import { PendingInteractionRegistry } from './pending-interaction'
@@ -9,6 +9,9 @@ import { KnownIdentity, recommendedQuestionCountFromAssessment, validateIntervie
 import { connectedPlatformsFromProfile, type EvidenceAssessment } from './onboarding-run'
 import { createDraftScopedTools } from './draft-tools'
 import { createSubagentTools } from './orchestration'
+import { hardenTools } from './tool-runtime'
+import { StationarityTracker, toolCallSignature } from './stationarity'
+import { createToolRepairLadder } from './tool-repair'
 
 type GapArtifact = 'baseline_metrics' | 'audience_memory'
 type ToolMap = Record<string, { description: string; parameters: any; execute: (args: any) => Promise<any> }>
@@ -20,45 +23,20 @@ import { SYSTEM_PROMPT, getSystemPrompt } from './agent-system-prompt'
 export { ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt } from './onboarding-system-prompt'
 
 const CHAT_MODEL = 'gemini-3.5-flash-lite'
-const TITLE_MODEL = 'gemma-4-31b-it'
 
-// ─── Title / Quick-action model selection ───────────────────────────────────
-// Rules:
-//   Both providers available:
-//     title = gemma-4-31b-it (Google priority)
-//     quick = GLM model (Z.AI priority)
-//   Google only (any tier):
-//     title = gemma-4-31b-it
-//     quick = gemini-3.5-flash-lite
-//   Z.AI coding plan:
-//     title = glm-4.5-air
-//     quick = glm-5-turbo
-//   Z.AI standard pro:
-//     title = glm-4.5-flash
-//     quick = glm-5-turbo
-//   Z.AI standard free:
-//     title = glm-4.5-flash
-//     quick = glm-4.7-flash
+// ─── Utility model selection ────────────────────────────────────────────────
+// Titles and quick actions use the first model of the dynamic chain — no
+// per-provider special-casing. Any configured provider is equally eligible.
+export function getUtilityModel(): string {
+  return buildChatFallbackChain()[0]
+}
 
 export function getTitleModel(): string {
-  const db = getDb()
-  const hasGoogle = (db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'google\' AND is_active = 1').get() as any).count > 0
-  if (hasGoogle) return 'gemma-4-31b-it'
-
-  const profile = getProfile()
-  if (profile?.zai_coding_plan) return 'glm-4.5-air'
-  return 'glm-4.5-flash'
+  return getUtilityModel()
 }
 
 export function getQuickActionModel(): string {
-  const db = getDb()
-  const hasZhipu = (db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'zhipu\' AND is_active = 1').get() as any).count > 0
-  if (hasZhipu) {
-    const profile = getProfile()
-    if (profile?.zai_coding_plan) return 'glm-5-turbo'
-    return getApiTier().tier === 'pro' ? 'glm-5-turbo' : 'glm-4.7-flash'
-  }
-  return 'gemini-3.5-flash-lite'
+  return getUtilityModel()
 }
 
 const MODEL_LABELS: Record<string, string> = {
@@ -84,8 +62,6 @@ const MODEL_LABELS: Record<string, string> = {
 }
 
 export const ONBOARDING_MODEL_FALLBACK = ['gemini-3.7-flash', 'gemini-3.5-flash-lite']
-export const CHAT_MODEL_FALLBACK_PRO = ['gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite']
-export const CHAT_MODEL_FALLBACK_FREE = ['gemini-3.5-flash-lite', 'gemini-3.7-flash']
 
 // Dynamic onboarding fallback chain: prefers Google if present, falls back to Z.AI if only Zhipu keys exist.
 export function getOnboardingFallbackChain(): string[] {
@@ -136,53 +112,72 @@ export interface AgentConfig {
   system: string
   tools: any
   profile: any
-  tier: string
 }
 
 export function getApiKey(model?: string, excludeApiKeyIds?: number[]): { apiKey: string; apiKeyId: number | null } {
   const profile = getProfile()
-  const provider = model?.startsWith('glm') ? 'zhipu' : 'google'
 
   if (model) {
-    const requiredTier = requiredTierFor(model)
-    const availableKey = getAvailableApiKeyForModel(model, requiredTier, excludeApiKeyIds)
+    const ref = parseModelRef(model)
+
+    // Custom OpenAI-compatible endpoints keep their credential on their own row.
+    if (ref.kind === 'custom') {
+      const cred = ref.customProviderId !== undefined ? getCustomProviderCredential(ref.customProviderId) : null
+      if (cred?.apiKey) {
+        logger.info('agent', `getApiKey: using credential of custom provider "${cred.name}" for model ${model}`)
+        return { apiKey: cred.apiKey, apiKeyId: null }
+      }
+      throw new Error(
+        `No API key configured for custom provider ${ref.customProviderId ?? '?'}. Add it in Settings → AI Providers.`,
+      )
+    }
+
+    const availableKey = getAvailableApiKeyForModel(model, excludeApiKeyIds)
     if (availableKey) {
       updateApiKeyLastUsed(availableKey.id)
       logger.info('agent', `getApiKey: using API key ${availableKey.id} for model ${model}`)
       return { apiKey: availableKey.api_key, apiKeyId: availableKey.id }
     } else {
-      logger.warn('agent', `getApiKey: no available API key found for model ${model} (tier: ${requiredTier}, exclude: ${JSON.stringify(excludeApiKeyIds)})`)
+      logger.warn('agent', `getApiKey: no available API key found for model ${model} (exclude: ${JSON.stringify(excludeApiKeyIds)})`)
     }
+
+    const primaryFallback =
+      ref.kind === 'zhipu' ? profile?.zai_api_key
+        : ref.kind === 'google' ? profile?.gemini_api_key
+          : undefined
+    const envFallback =
+      ref.kind === 'google' ? process.env.GEMINI_API_KEY
+        : ref.kind === 'openai' ? process.env.OPENAI_API_KEY
+          : ref.kind === 'anthropic' ? process.env.ANTHROPIC_API_KEY
+            : undefined
+    const apiKey = primaryFallback || envFallback
+
+    if (!apiKey) {
+      throw new Error(
+        `No API key configured for provider: ${ref.kind === 'zhipu' ? 'Z.AI' : ref.kind === 'google' ? 'Google AI Studio' : ref.kind}. Please complete setup.`,
+      )
+    }
+    logger.info('agent', `getApiKey: using fallback primary API key (${ref.kind})`)
+    return { apiKey, apiKeyId: null }
   }
 
-  const apiKey = provider === 'zhipu'
-    ? profile?.zai_api_key
-    : (profile?.gemini_api_key || process.env.GEMINI_API_KEY)
-
-  if (!apiKey) {
-    throw new Error(
-      `No API key configured for provider: ${provider === 'zhipu' ? 'Z.AI' : 'Google AI Studio'}. Please complete setup.`,
-    )
-  }
-  logger.info('agent', `getApiKey: using fallback primary API key (${provider})`)
-  return { apiKey, apiKeyId: null }
+  throw new Error('No API key configured. Please complete setup.')
 }
 
 export function getAgentConfig(options?: AgentOptions): AgentConfig {
   const profile = getProfile()
-  const tier = getApiTier().tier
 
   let fallbackChain = options?.fallbackChain
   if (!fallbackChain) {
-    fallbackChain = tier === 'pro' ? CHAT_MODEL_FALLBACK_PRO : CHAT_MODEL_FALLBACK_FREE
+    // Dynamic chain across every provider that currently has credentials.
+    fallbackChain = buildChatFallbackChain()
   }
 
   let modelId = options?.model ? normalizeModelId(MODEL_LABELS[options.model] ?? '') : undefined
   if (!modelId) {
     for (const candidateModel of fallbackChain) {
-      const requiredTier = requiredTierFor(candidateModel)
-      if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(candidateModel, requiredTier)) {
-        logger.warn('agent', `model ${candidateModel} is exhausted for all ${requiredTier || 'eligible'} API keys, trying next in chain`)
+      if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(candidateModel)) {
+        logger.warn('agent', `model ${candidateModel} is exhausted for all API keys, trying next in chain`)
         continue
       }
       modelId = candidateModel
@@ -229,8 +224,7 @@ export function getAgentConfig(options?: AgentOptions): AgentConfig {
     thinkingLevel,
     system,
     tools: createTools({ defaultMax: 10, platforms }),
-    profile,
-    tier
+    profile
   }
 }
 
@@ -717,7 +711,66 @@ async function toModelMessages(messages: AppMessage[]): Promise<any[]> {
       continue
     }
   }
-  return result
+  return repairModelMessagePairing(result)
+}
+
+/**
+ * Boundary history repair, ported from grok-build's dangling-tool-call
+ * synthesis: after an interruption a stored assistant message can carry tool
+ * calls with no following results, which every provider rejects. At this write
+ * boundary we synthesize exactly one typed result per missing call id and
+ * de-duplicate repeated results for the same id (last one wins). Pure.
+ */
+export function repairModelMessagePairing(messages: any[]): any[] {
+  // Collect ids that already have a result, in order of appearance.
+  const resultIds = new Set<string>()
+  for (const msg of messages) {
+    if (msg?.role !== 'tool') continue
+    for (const part of msg.content || []) {
+      if (part?.type === 'tool-result' && part.toolCallId) resultIds.add(part.toolCallId)
+    }
+  }
+
+  const repaired: any[] = []
+  for (const msg of messages) {
+    if (msg?.role === 'assistant' && Array.isArray(msg.content)) {
+      const missing = msg.content.filter(
+        (part: any) => part?.type === 'tool-call' && part.toolCallId && !resultIds.has(part.toolCallId),
+      )
+      repaired.push(msg)
+      if (missing.length > 0) {
+        repaired.push({
+          role: 'tool',
+          content: missing.map((part: any) => ({
+            type: 'tool-result' as const,
+            toolCallId: part.toolCallId,
+            toolName: part.toolName || '',
+            output: { status: 'cancelled', error: 'This tool call was interrupted before it produced a result. If it is still needed, call the tool again.' },
+          })),
+        })
+      }
+      continue
+    }
+
+    if (msg?.role === 'tool') {
+      // De-duplicate results for the same call id — the LAST occurrence wins
+      // (a later result supersedes an earlier one for the same call).
+      const parts = [...(msg.content || [])]
+      const lastIndexOfId = new Map<string, number>()
+      parts.forEach((part: any, i: number) => {
+        if (part?.type === 'tool-result' && part.toolCallId) lastIndexOfId.set(part.toolCallId, i)
+      })
+      const kept = parts.filter((part: any, i: number) => {
+        if (part?.type !== 'tool-result' || !part.toolCallId) return true
+        return lastIndexOfId.get(part.toolCallId) === i
+      })
+      repaired.push({ ...msg, content: kept.length > 0 ? kept : msg.content })
+      continue
+    }
+
+    repaired.push(msg)
+  }
+  return repaired
 }
 
 // ─── Text generation (no tools, non-streaming) ──────────────────────────────
@@ -727,39 +780,14 @@ export async function generateText(
   system?: string,
   options?: { model?: string },
 ): Promise<string> {
-  const db = getDb()
-  const googleKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'google\' AND is_active = 1').get() as any
-  const hasGoogle = googleKeys.count > 0
-
-  let activeModel = options?.model
-  let provider: 'google' | 'zhipu' = 'google'
-
-  if (!activeModel) {
-    if (hasGoogle) {
-      activeModel = TITLE_MODEL
-    } else {
-      const globalTier = getApiTier().tier
-      activeModel = globalTier === 'pro' ? 'glm-5-turbo' : 'glm-4.7-flash'
-      provider = 'zhipu'
-    }
-  } else {
-    provider = activeModel.startsWith('glm') ? 'zhipu' : 'google'
-  }
+  const activeModel = options?.model
+    ? normalizeModelId(MODEL_LABELS[options.model] ?? options.model)
+    : buildChatFallbackChain()[0]
 
   const { apiKey } = getApiKey(activeModel)
 
   try {
-    let modelInstance: any
-    if (provider === 'zhipu') {
-      const { createZhipu } = await import('zhipu-ai-provider')
-      const profile = getProfile()
-      const baseURL = profile?.zai_coding_plan
-        ? 'https://api.z.ai/api/coding/paas/v4'
-        : 'https://api.z.ai/api/paas/v4'
-      modelInstance = createZhipu({ baseURL, apiKey })(activeModel as any)
-    } else {
-      modelInstance = createGoogle({ apiKey })(activeModel)
-    }
+    const modelInstance = await createModelInstance(parseModelRef(activeModel), apiKey)
 
     const { text } = await aiGenerateText({
       model: modelInstance,
@@ -869,12 +897,36 @@ export function abortableSleep(ms: number, ac?: AbortController): Promise<void> 
 
 // ─── Main agent loop — AI SDK streamText with multi-step tools ──────────────
 // streamText with stopWhen handles the entire tool-calling loop internally.
-// We wrap it with model fallback + API key rotation for rate limit resilience.
+// We wrap it with model fallback + API key rotation for rate limit resilience,
+// plus the grok-build turn-loop guards: a stationarity tracker (nudge then
+// stop on repeated identical tool calls), bounded empty-response resamples,
+// and local repair of malformed tool-call arguments.
+
+/** Structured terminal-failure information, consumed by IPC error mapping. */
+export interface AgentFailureInfo {
+  /** Stable machine kind — mirrors the grok-build SamplingErrorKind idea. */
+  errorKind: 'all-models-exhausted' | 'no-credentials' | 'rate-limited' | 'auth' | 'fatal'
+  attemptedModels: string[]
+  isRateLimited: boolean
+}
+
+const EMPTY_RESPONSE_MAX_RESAMPLES = 1
+
+/** Best-effort count of a finished stream's response messages; never throws. */
+async function peekResponseMessageCount(result: any): Promise<number> {
+  try {
+    const msgs = await result?.responseMessages
+    return Array.isArray(msgs) ? msgs.length : 0
+  } catch {
+    return 0
+  }
+}
+
 /** One streaming agent run: input messages, callbacks, and configuration. */
 export interface RunAgentRequest {
   messages: AppMessage[]
   onDone: (fullText: string) => void
-  onError: (error: string) => void
+  onError: (error: string, info?: AgentFailureInfo) => void
   onChunk?: (text: string) => void
   onToolCall?: (name: string, args: any) => void
   onToolResult?: (name: string, result: any) => void
@@ -909,7 +961,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     sessionId,
     onModelSwitch,
   } = request
-  let fallbackChain = options?.fallbackChain || (getApiTier().tier === 'pro' ? CHAT_MODEL_FALLBACK_PRO : CHAT_MODEL_FALLBACK_FREE)
+  let fallbackChain = options?.fallbackChain || buildChatFallbackChain()
   // Respect user-selected model: move it to front of fallback chain
   if (options?.model) {
     const selectedId = normalizeModelId(MODEL_LABELS[options.model] ?? '')
@@ -920,9 +972,22 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   const maxSteps = options?.maxSteps ?? 40
   const config = getAgentConfig(options)
   const rawTools = toolsOverride || config.tools
-  const aiTools = toAITools(rawTools)
+  // Hardened execution envelope: per-capability timeouts + result budgeting
+  // before anything re-enters model context (interactive/orchestration pass through).
+  const aiTools = toAITools(hardenTools(rawTools as Record<string, any>))
+  // Local repair of malformed tool-call arguments before they abort a step.
+  const repairToolCall = createToolRepairLadder(rawTools as Record<string, any>)
   const system = systemPromptOverride || config.system
   const thinkingLevel = config.thinkingLevel as 'minimal' | 'low' | 'medium' | 'high'
+
+  // Turn-scoped loop guards. The stop guard is an internal AbortController so a
+  // stationarity stop can end the stream gracefully without looking like a
+  // user cancellation to the surrounding machinery.
+  const stationarity = new StationarityTracker()
+  let nudgeArmed = false
+  const stationarityStopGuard = new AbortController()
+  const attemptedModels: string[] = []
+  let sawRateLimit = false
 
   const userCount = messages.filter(m => m.role === 'user').length
 
@@ -972,12 +1037,12 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     logger.info('agent', `attempting with model: ${currentModel} (${i + 1}/${fallbackChain.length})`)
     onModelSwitch?.(currentModel)
 
-    const requiredTier = requiredTierFor(currentModel)
-    if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(currentModel, requiredTier)) {
+    if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(currentModel)) {
       logger.warn('agent', `model ${currentModel} exhausted for all keys, skipping`)
       continue
     }
 
+    attemptedModels.push(currentModel)
     const triedKeyIds = new Set<number | null>()
     let keyAttempts = 0
 
@@ -986,12 +1051,19 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
       let apiKeyId: number | null
 
       if (keyAttempts === 0) {
-        const info = getApiKey(currentModel)
-        apiKey = info.apiKey
-        apiKeyId = info.apiKeyId
+        // Custom endpoints without credentials throw here — skip the chain
+        // entry instead of crashing the whole run.
+        try {
+          const info = getApiKey(currentModel)
+          apiKey = info.apiKey
+          apiKeyId = info.apiKeyId
+        } catch (e: any) {
+          logger.warn('agent', `no credential for ${currentModel}, skipping (${e?.message})`)
+          break
+        }
       } else {
         const triedNumIds = [...triedKeyIds].filter((v): v is number => v != null)
-        const candidate = getAvailableApiKeyForModel(currentModel, requiredTier, triedNumIds)
+        const candidate = getAvailableApiKeyForModel(currentModel, triedNumIds)
         if (!candidate) {
           logger.warn('agent', `No more API keys available for ${currentModel} (tried ${triedNumIds.length})`)
           break
@@ -1005,6 +1077,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
       keyAttempts++
 
       let transientRetries = 0
+      let emptyResamples = 0
       let nextModel = false
 
       // Inner loop: on transient (high-demand / 5xx / network) errors, wait with backoff
@@ -1030,18 +1103,13 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
         }
 
         try {
-          const isZhipu = currentModel.startsWith('glm')
-          let modelInstance: any
-          if (isZhipu) {
-            const { createZhipu } = await import('zhipu-ai-provider')
-            const profile = getProfile()
-            const baseURL = profile?.zai_coding_plan
-              ? 'https://api.z.ai/api/coding/paas/v4'
-              : 'https://api.z.ai/api/paas/v4'
-            modelInstance = createZhipu({ baseURL, apiKey })(currentModel as any)
-          } else {
-            modelInstance = createGoogle({ apiKey })(currentModel)
-          }
+          const modelInstance = await createModelInstance(parseModelRef(currentModel), apiKey)
+
+          // User cancellation and an internal stationarity stop share one signal;
+          // the catch path tells them apart by checking which source aborted.
+          const combinedSignal = abortController
+            ? AbortSignal.any([abortController.signal, stationarityStopGuard.signal])
+            : stationarityStopGuard.signal
 
           const runOptions: any = {
             model: modelInstance,
@@ -1052,14 +1120,13 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
             temperature: 0.3,
             maxOutputTokens: 8192,
             maxRetries: 0,
+            abortSignal: combinedSignal,
+            experimental_repairToolCall: repairToolCall,
           }
 
-          if (abortController) {
-            runOptions.abortSignal = abortController.signal
-          }
-
-          // thinkingConfig is Google-only — Zhipu uses its own `thinking` setting in providerOptions.zhipu
-          if (!isZhipu) {
+          // thinkingConfig is Google-only — Zhipu uses its own `thinking` setting
+          // in providerOptions.zhipu; OpenAI/Anthropic/custom need none here.
+          if (parseModelRef(currentModel).kind === 'google') {
             runOptions.providerOptions = {
               google: {
                 thinkingConfig: {
@@ -1073,14 +1140,29 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
           result = streamText({
             ...runOptions,
             prepareStep: ({ stepNumber, messages: stepMessages }) => {
+              const extra: any[] = []
+
+              // Stationarity nudge (grok-build pattern): below the hard-stop
+              // threshold, one injected reminder tells the model it is looping.
+              if (nudgeArmed) {
+                nudgeArmed = false
+                extra.push({
+                  role: 'user',
+                  content: '<system-reminder>You have repeated the same tool call with identical arguments several times. This is not making progress. Change the approach: adjust the arguments meaningfully, use a different tool, summarize what you have, or finish your answer.</system-reminder>',
+                })
+                logger.warn('agent', 'stationarity nudge injected')
+              }
+
               if (stepNumber > 0 && drainInjectedMessages) {
                 const injected = drainInjectedMessages()
                 if (injected.length > 0) {
                   logger.info('agent', `injected ${injected.length} message(s) into active run`)
                   onInjectedMessages?.(injected)
-                  return { messages: [...stepMessages, ...toModelMessagesSync(injected)] }
+                  extra.push(...toModelMessagesSync(injected))
                 }
               }
+
+              if (extra.length > 0) return { messages: [...stepMessages, ...extra] }
             },
             onError: ({ error }) => {
               logger.error('agent', `stream error: ${(error as Error)?.message || error}`)
@@ -1088,8 +1170,15 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
           })
 
           let streamError: any = null
+          let sawText = false
+          let sawReasoning = false
+          let sawToolCall = false
 
           for await (const part of result.stream) {
+            if (stationarityStopGuard.signal.aborted) {
+              logger.info('agent', 'stationarity stop during stream')
+              break
+            }
             if (abortController?.signal.aborted) {
               logger.info('agent', 'aborted during stream')
               await persistProgressOnAbort()
@@ -1100,15 +1189,27 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
             switch (part.type) {
               case 'text-delta':
                 fullText += part.text
+                sawText = true
                 onChunk(part.text)
                 break
               case 'reasoning-delta':
+                sawReasoning = true
                 onReasoning?.(part.text)
                 break
-              case 'tool-call':
+              case 'tool-call': {
+                sawToolCall = true
                 onToolCall(part.toolName, part.input)
                 logger.info('agent', `tool-call: ${part.toolName}`, part.input)
+
+                const verdict = stationarity.record(part.toolName, part.input)
+                if (verdict.action === 'nudge') {
+                  nudgeArmed = true
+                } else if (verdict.action === 'stop') {
+                  logger.warn('agent', `stationarity stop after ${verdict.repeats} identical ${part.toolName} calls`)
+                  stationarityStopGuard.abort()
+                }
                 break
+              }
               case 'tool-result': {
                 const isImageTool = part.toolName === 'inspect_image_url'
                 const truncateLimit = SOCIAL_FETCH_TOOLS.has(part.toolName) || isImageTool ? Infinity : 15000
@@ -1132,7 +1233,35 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
 
           if (streamError) throw streamError
 
+          // Stationarity stop: the guard aborted the stream mid-loop. End the
+          // turn gracefully with whatever was produced instead of treating it
+          // as an error — mirrors grok-build's TurnOutcome::StationarityEnded.
+          if (stationarityStopGuard.signal.aborted) {
+            logger.warn('agent', 'run ended by stationarity guard')
+            options?.onModelMessages?.(modelMessages)
+            onDone(fullText)
+            return
+          }
+
           logger.info('agent', `done — ${fullText.length} chars total`)
+
+          // Empty-response resample (grok-build treats empty completions as
+          // transient): a completion with no text, no reasoning, and no tool
+          // calls is worth exactly one bounded retry before giving up.
+          const isEmptyCompletion =
+            !sawText && !sawReasoning && !sawToolCall &&
+            fullText.trim() === '' &&
+            (await peekResponseMessageCount(result)) === 0
+          if (isEmptyCompletion) {
+            if (emptyResamples < EMPTY_RESPONSE_MAX_RESAMPLES && !abortController?.signal.aborted) {
+              emptyResamples++
+              logger.warn('agent', 'empty completion from model, resampling once')
+              onTransientRetry?.({ attempt: 1, maxAttempts: 1, backoffMs: 1200, model: currentModel })
+              await abortableSleep(1200, abortController)
+              continue
+            }
+            logger.warn('agent', 'empty completion persisted after resample budget')
+          }
 
           // Persist accumulated messages for next turn's round-trip.
           let responseMsgs: any[] = []
@@ -1151,6 +1280,15 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
           return
 
         } catch (e: any) {
+          // Internal stationarity stop surfacing as a thrown AbortError: finish
+          // the turn gracefully, exactly like the mid-stream guard path.
+          if (stationarityStopGuard.signal.aborted && !abortController?.signal.aborted) {
+            logger.warn('agent', 'run ended by stationarity guard (via error path)')
+            options?.onModelMessages?.(modelMessages)
+            onDone(fullText)
+            return
+          }
+
           if (abortController?.signal.aborted) {
             logger.info('agent', 'aborted by user')
             await persistProgressOnAbort()
@@ -1173,6 +1311,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
 
           if (isRateLimitError(e)) {
             // 429: this key is quota-limited. Mark exhausted + rotate to another key.
+            sawRateLimit = true
             logger.warn('agent', `${currentModel} hit rate limit for API key ${apiKeyId}, rotating key`, {
               status: e?.status || e?.statusCode,
               message: (e?.message || '').substring(0, 200),
@@ -1224,8 +1363,18 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     logger.info('agent', `model ${currentModel} failed, trying next model`)
   }
 
-  logger.error('agent', 'all models in fallback chain failed')
-  onError('All available models failed or hit rate limits. Please try again later or upgrade your API tier.')
+  const rateLimitedChain = sawRateLimit
+  logger.error('agent', 'all models in fallback chain failed', { attemptedModels })
+  onError(
+    rateLimitedChain
+      ? 'All available models hit rate limits. Wait for the cooldown or add another provider key in Settings.'
+      : 'All available models failed. Check your provider credentials in Settings or try another model.',
+    {
+      errorKind: attemptedModels.length === 0 ? 'no-credentials' : rateLimitedChain ? 'rate-limited' : 'all-models-exhausted',
+      attemptedModels,
+      isRateLimited: rateLimitedChain,
+    },
+  )
 }
 
 // ponytail: sync version of toModelMessages for prepareStep (no image saving —

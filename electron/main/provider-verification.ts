@@ -1,7 +1,8 @@
 // Credential verification for AI providers.
 //
-// This is deliberately separate from api-tier.ts: tier detection treats every
-// non-quota failure as "free" for safety, which makes it useless for deciding
+// Verification answers one question only: "does this credential work?" Tier
+// detection used to conflate these concerns by treating every non-quota
+// failure as "free" for safety, which makes it useless for deciding
 // whether a credential actually works. Verification must tell an invalid key
 // apart from a valid-but-rate-limited key, a network blip, and a missing model.
 //
@@ -12,8 +13,9 @@ import { generateText } from 'ai'
 import { createGoogle } from '@ai-sdk/google'
 import { credentialSuffix } from './credentials'
 import { logger } from './log'
+import { OPENAI_MODEL_CATALOG, ANTHROPIC_MODEL_CATALOG } from './models'
 
-export type ProviderName = 'google' | 'zhipu'
+export type ProviderName = 'google' | 'zhipu' | 'openai' | 'anthropic'
 
 export type VerificationCode =
   | 'VALID'
@@ -41,30 +43,30 @@ export interface ProviderVerificationResult extends CredentialRef {
 }
 
 export interface ProviderVerificationRequest {
-  google?: {
-    primary?: string
-    additional?: string[]
-    storedKeyIds?: number[]
-  }
-  zhipu?: {
-    primary?: string
-    additional?: string[]
-    storedKeyIds?: number[]
-    codingPlan?: boolean
-  }
+  google?: ProviderVerificationSection
+  zhipu?: ProviderVerificationSection & { codingPlan?: boolean }
+  openai?: ProviderVerificationSection
+  anthropic?: ProviderVerificationSection
+}
+
+interface ProviderVerificationSection {
+  primary?: string
+  additional?: string[]
+  storedKeyIds?: number[]
 }
 
 export interface CredentialVerificationReport {
   ok: boolean
   results: ProviderVerificationResult[]
-  tier: 'free' | 'pro' | 'unknown'
   message: string
 }
 
-// Cheap models that exist on the free tier, so verification never fails just
-// because the account lacks pro access.
+// Cheap catalog models, so verification never fails just because the account
+// lacks access to the flagship models.
 export const GOOGLE_PROBE_MODEL = 'gemini-3.5-flash-lite'
 export const ZHIPU_PROBE_MODEL = 'glm-4.7-flash'
+export const OPENAI_PROBE_MODEL = OPENAI_MODEL_CATALOG[OPENAI_MODEL_CATALOG.length - 1].id
+export const ANTHROPIC_PROBE_MODEL = ANTHROPIC_MODEL_CATALOG[ANTHROPIC_MODEL_CATALOG.length - 1].id
 
 export function zhipuBaseUrl(codingPlan?: boolean): string {
   return codingPlan
@@ -204,11 +206,33 @@ const liveProbe: CredentialProbe = async (provider, apiKey, codingPlan) => {
     return
   }
 
-  const { createZhipu } = await import('zhipu-ai-provider')
+  if (provider === 'zhipu') {
+    const { createZhipu } = await import('zhipu-ai-provider')
+    await generateText({
+      model: createZhipu({ baseURL: zhipuBaseUrl(codingPlan), apiKey })(ZHIPU_PROBE_MODEL as any),
+      prompt: 'Reply with OK',
+      maxOutputTokens: 2,
+      maxRetries: 0,
+    })
+    return
+  }
+
+  if (provider === 'anthropic') {
+    const { createAnthropic } = await import('@ai-sdk/anthropic')
+    await generateText({
+      model: createAnthropic({ apiKey })(ANTHROPIC_PROBE_MODEL),
+      prompt: 'Reply with OK',
+      maxOutputTokens: 8,
+      maxRetries: 0,
+    })
+    return
+  }
+
+  const { createOpenAI } = await import('@ai-sdk/openai')
   await generateText({
-    model: createZhipu({ baseURL: zhipuBaseUrl(codingPlan), apiKey })(ZHIPU_PROBE_MODEL as any),
+    model: createOpenAI({ apiKey })(OPENAI_PROBE_MODEL),
     prompt: 'Reply with OK',
-    maxOutputTokens: 2,
+    maxOutputTokens: 16,
     maxRetries: 0,
   })
 }

@@ -161,9 +161,9 @@ The AI agent populates these tables during onboarding:
 | `target_accounts` | Accounts to engage with for growth |
 | `algorithm_rules` | Platform algorithm optimization rules |
 | `replies` | Template reply patterns |
-| `api_keys` | Multi-key storage with provider/tier/fingerprint |
+| `api_keys` | Multi-key storage with provider/fingerprint |
 | `onboarding_runs` | Checkpoint/resume state for onboarding attempts |
-| `api_tier_info` | Detected API tier (free/pro) |
+| `custom_providers` | User-defined OpenAI-compatible endpoints (base URL, credential ref, model list) |
 
 ---
 

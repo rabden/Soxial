@@ -19,8 +19,26 @@ const MODEL_DISPLAY: Record<string, string> = {
   // Main normalizes at every boundary; these exist only for stale payloads.
   "gemini-3.6-flash": "Gemini 3.6 Flash",
   "glm-5.2": "GLM 5.2",
+  // Hosted catalogs (kept in sync with electron/main/models.ts defaults).
+  "openai/gpt-5.2": "GPT-5.2",
+  "openai/gpt-5-mini": "GPT-5 mini",
+  "openai/gpt-4.1": "GPT-4.1",
+  "openai/gpt-4o": "GPT-4o",
+  "anthropic/claude-opus-4-1": "Claude Opus 4.1",
+  "anthropic/claude-sonnet-4-5": "Claude Sonnet 4.5",
+  "anthropic/claude-haiku-4-5": "Claude Haiku 4.5",
 };
-const modelLabel = (id: string) => MODEL_DISPLAY[id] || id;
+
+/** Bare display id for namespaced ids without a known label ('gpt-4o', 'my-model'). */
+function prettifyModelId(id: string): string {
+  if (id.startsWith("custom/")) {
+    const rest = id.slice("custom/".length);
+    const slash = rest.indexOf("/");
+    return slash > 0 ? rest.slice(slash + 1) : rest;
+  }
+  const slash = id.indexOf("/");
+  return slash > 0 ? id.slice(slash + 1) : id;
+}
 
 interface Attachment {
   id: string;
@@ -74,7 +92,37 @@ function ZaiIcon({ className }: { className?: string }) {
   );
 }
 
+function OpenAIIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.7">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 3.5v17M3.5 12h17" opacity="0.55" />
+    </svg>
+  );
+}
+
+function AnthropicIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor">
+      <path d="M13.9 4.5h-3.4L4.5 19.5h3.5l1.2-3.1h6l1.2 3.1H20L13.9 4.5zm-3.7 9l2-5.2 2 5.2h-4z" />
+    </svg>
+  );
+}
+
+function CustomEndpointIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.7">
+      <rect x="4" y="5" width="16" height="6.5" rx="1.5" />
+      <rect x="4" y="14" width="16" height="6.5" rx="1.5" />
+      <path d="M7.5 8.2h.01M7.5 17.2h.01" strokeLinecap="round" strokeWidth="2.2" />
+    </svg>
+  );
+}
+
 function ProviderIcon({ model, className }: { model: string; className?: string }) {
+  if (model.startsWith("openai/")) return <OpenAIIcon className={className} />;
+  if (model.startsWith("anthropic/")) return <AnthropicIcon className={className} />;
+  if (model.startsWith("custom/")) return <CustomEndpointIcon className={className} />;
   return model.startsWith("glm")
     ? <ZaiIcon className={className} />
     : <GoogleIcon className={className} />;
@@ -169,6 +217,8 @@ export interface PromptInputProps {
   placeholder?: string;
   className?: string;
   models?: string[];
+  /** Optional label overrides keyed by model id (custom endpoint catalogs). */
+  modelLabels?: Record<string, string>;
   model?: string;
   efforts?: string[];
   modelSupportsEffort?: (model: string) => boolean;
@@ -190,29 +240,37 @@ export interface PromptInputProps {
 }
 
 export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
-  ({
-    onSubmit,
-    placeholder = "Ask anything",
-    className,
-    models = ["Gemini 3.5 Flash Lite"],
-    model: controlledModel,
-    efforts = ["Low", "Medium", "High"],
-    modelSupportsEffort = () => true,
-    disabled = false,
-    isStreaming = false,
-    onStop,
-    queue = [],
-    onRemoveQueued,
-    question,
-    onAnswer,
-    modelExhaustionStatus,
-    onModelChange,
-    onEffortChange,
-  }) => {
+  (
+    {
+      onSubmit,
+      placeholder = "Ask anything",
+      className,
+      models = ["Gemini 3.5 Flash Lite"],
+      modelLabels,
+      model: controlledModel,
+      efforts = ["Low", "Medium", "High"],
+      modelSupportsEffort = () => true,
+      disabled = false,
+      isStreaming = false,
+      onStop,
+      queue = [],
+      onRemoveQueued,
+      question,
+      onAnswer,
+      modelExhaustionStatus,
+      onModelChange,
+      onEffortChange,
+    },
+    forwardedRef,
+  ) => {
     const [expanded, setExpanded] = useState(false);
     const [isSmooth, setIsSmooth] = useState(false);
     const [value, setValue] = useState("");
     const [selectedModel, setSelectedModel] = useState(models[0]);
+
+    // Label resolution order: caller-provided map (custom endpoints), built-in
+    // catalog, then the bare model id with any namespace prefix stripped.
+    const labelFor = (id: string) => modelLabels?.[id] || MODEL_DISPLAY[id] || prettifyModelId(id);
 
     // Keep selectedModel in sync when the `models` prop list changes (e.g. after
     // availableModels loads async). Preserve the user's choice if it's still valid.
@@ -247,6 +305,13 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const internalRef = useRef<HTMLDivElement>(null);
+    // Stable container ref: keeps the internal handle and forwards any
+    // parent-provided ref without re-firing on re-renders.
+    const setContainerNode = useCallback((node: HTMLDivElement | null) => {
+      internalRef.current = node;
+      if (typeof forwardedRef === "function") forwardedRef(node);
+      else if (forwardedRef) forwardedRef.current = node;
+    }, [forwardedRef]);
     const topFadeRef = useRef<HTMLDivElement>(null);
     const bottomFadeRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -464,9 +529,7 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
 
     return (
       <div
-        ref={(node) => {
-          internalRef.current = node;
-        }}
+        ref={setContainerNode}
         onBlur={handleBlur}
         className={cn(
           "relative flex flex-col w-full pointer-events-auto",
@@ -869,13 +932,13 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
               >
                 <ProviderIcon model={selectedModel} className="size-3.5 opacity-70 group-hover:opacity-100" />
                 <span className="text-xs font-semibold">
-                  <MorphingText text={modelLabel(selectedModel)} />
+                  <MorphingText text={labelFor(selectedModel)} />
                 </span>
               </button>
               <div
                 style={{ transformOrigin: "bottom left" }}
                 className={cn(
-                  "absolute bottom-full left-0 mb-2.5 z-50 w-48 rounded-2xl border border-border bg-card/95 p-1 shadow-xl backdrop-blur-md flex flex-col gap-0.5 transition-all duration-400",
+                  "absolute bottom-full left-0 mb-2.5 z-50 w-64 max-h-[min(60vh,24rem)] overflow-y-auto scrollbar-none rounded-2xl border border-border bg-card/95 p-1 shadow-xl backdrop-blur-md flex flex-col gap-0.5 transition-all duration-400",
                   modelOpen
                     ? "opacity-100 scale-100 translate-y-0 pointer-events-auto"
                     : "opacity-0 scale-95 translate-y-3 pointer-events-none",
@@ -919,9 +982,9 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
                       )}
                       disabled={isModelExhausted}
                     >
-                      <span className="flex items-center gap-2">
-                        <ProviderIcon model={model} className="size-3.5 opacity-85 group-hover:opacity-100" />
-                        {modelLabel(model)}
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <ProviderIcon model={model} className="size-3.5 shrink-0 opacity-85 group-hover:opacity-100" />
+                        <span className="truncate">{labelFor(model)}</span>
                       </span>
                       {isModelExhausted && hoursRemaining != null && hoursRemaining > 0 && (
                         <span className="ml-auto text-[10px] text-muted-foreground/60">

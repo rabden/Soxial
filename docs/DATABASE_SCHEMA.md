@@ -427,7 +427,8 @@ Cached home screen quick-action prompt suggestions.
 ---
 
 ### 17. `api_tier_info`
-Cached global API capability tier detection state.
+Legacy table from the removed pro/free tier detection. No longer written; kept
+so older databases migrate cleanly.
 
 | Column | Data Type | Constraints | Default | Description |
 |---|---|---|---|---|
@@ -502,3 +503,23 @@ cadence notes, memory) after the user enters chat. One live job per run.
 **Indexes:**
 - `idx_enrichment_jobs_status_updated` ON `onboarding_enrichment_jobs(status, updated_at DESC)`
 - `idx_enrichment_jobs_run` ON `onboarding_enrichment_jobs(run_id)`
+
+---
+
+### 21. `custom_providers`
+User-defined OpenAI-compatible endpoints. Each row carries its own credential
+(credential vault ref, never a raw key) and a JSON list of served models; every
+model appears in the chat prompt bar as `custom/<provider_id>/<model_id>`.
+
+| Column | Data Type | Constraints | Default | Description |
+|---|---|---|---|---|
+| `id` | `INTEGER` | `PRIMARY KEY AUTOINCREMENT` | - | Provider row id |
+| `name` | `TEXT` | `NOT NULL` | - | Display name |
+| `base_url` | `TEXT` | `NOT NULL` | - | OpenAI-compatible API root (no trailing slash) |
+| `credential_ref` | `TEXT` | - | `NULL` | Credential vault reference |
+| `models_json` | `TEXT` | `NOT NULL` | `'[]'` | JSON `[{id, label}]` of served models |
+| `is_active` | `INTEGER` | - | `1` | Soft-delete flag |
+| `created_at` | `TEXT` | - | `datetime('now')` | Creation timestamp |
+
+Removal is a soft delete (`is_active = 0`) plus credential-vault cleanup; the
+credential itself never leaves the main process.

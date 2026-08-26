@@ -65,7 +65,7 @@ function ipcErrorMessage(error: unknown, fallback: string) {
 
 // Same input shell as the onboarding steps: h-11 card surface, hairline
 // border, corner-radius morph on focus.
-function TextField({ label, value, onChange, placeholder, type = 'text', icon: Icon, disabled }: {
+function TextField({ label, value, onChange, placeholder, type = 'text', icon: Icon, disabled, onKeyDown }: {
   label?: string
   value: string
   onChange: (value: string) => void
@@ -73,6 +73,7 @@ function TextField({ label, value, onChange, placeholder, type = 'text', icon: I
   type?: string
   icon?: any
   disabled?: boolean
+  onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void
 }) {
   return (
     <div className={cn(label ? 'space-y-2' : '')}>
@@ -83,6 +84,7 @@ function TextField({ label, value, onChange, placeholder, type = 'text', icon: I
           aria-label={label}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
           disabled={disabled}
           placeholder={placeholder}
           className={cn(
@@ -96,13 +98,32 @@ function TextField({ label, value, onChange, placeholder, type = 'text', icon: I
   )
 }
 
+type HostedProviderId = 'google' | 'zhipu' | 'openai' | 'anthropic'
+
+const HOSTED_PROVIDER_TABS: Array<{ id: HostedProviderId; label: string; placeholder: string }> = [
+  { id: 'google', label: 'Google', placeholder: 'AIza…' },
+  { id: 'zhipu', label: 'Z.AI', placeholder: 'ZAI_api_key…' },
+  { id: 'openai', label: 'OpenAI', placeholder: 'sk-…' },
+  { id: 'anthropic', label: 'Anthropic', placeholder: 'sk-ant-…' },
+]
+
+interface ExtraKey { id?: number; value: string; masked?: string | null }
+
 export default function Profile({ profile, section, onBack, onSaved, onTwitterHandleRebuilt, onTwitterHandleRebuildRunningChange }: ProfileProps) {
-  const [activeTab, setActiveTab] = useState<'google' | 'zhipu'>('google')
-  const [primaryGoogleKey, setPrimaryGoogleKey] = useState(profile?.gemini_api_key || '')
-  const [primaryZhipuKey, setPrimaryZhipuKey] = useState(profile?.zai_api_key || '')
-  const [googleExtras, setGoogleExtras] = useState<Array<{ id?: number; value: string; masked?: string }>>([])
-  const [zhipuExtras, setZhipuExtras] = useState<Array<{ id?: number; value: string; masked?: string }>>([])
+  const [activeTab, setActiveTab] = useState<HostedProviderId>('google')
+  const [primaryKeys, setPrimaryKeys] = useState<Record<HostedProviderId, string>>({
+    google: profile?.gemini_api_key || '',
+    zhipu: profile?.zai_api_key || '',
+    openai: profile?.openai_api_key || '',
+    anthropic: profile?.anthropic_api_key || '',
+  })
+  const [extraKeys, setExtraKeys] = useState<Record<HostedProviderId, ExtraKey[]>>({ google: [], zhipu: [], openai: [], anthropic: [] })
   const [codingPlan, setCodingPlan] = useState(profile?.zai_coding_plan === 1)
+  const [customProviders, setCustomProviders] = useState<Array<{ id: number; name: string; baseUrl: string; models: Array<{ id: string; label: string }>; hasKey: boolean; keyMasked: string | null }>>([])
+  const [customDraft, setCustomDraft] = useState<{ id?: number; name: string; baseUrl: string; apiKey: string; models: string[]; modelInput: string } | null>(null)
+  const [customBusy, setCustomBusy] = useState<'test' | 'save' | 'remove' | null>(null)
+  const [customTest, setCustomTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [customError, setCustomError] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [strategyReviewRunId, setStrategyReviewRunId] = useState<string | null>(null)
@@ -120,14 +141,24 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
   const [includeMedia, setIncludeMedia] = useState(false)
 
   useEffect(() => {
-    window.api.getApiKeys('google').then((keys: any[]) => {
-      setGoogleExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })))
-      if (profile?.gemini_api_key) setPrimaryGoogleKey(profile.gemini_api_key)
-    })
-    window.api.getApiKeys('zhipu').then((keys: any[]) => {
-      setZhipuExtras((keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })))
-    })
+    for (const provider of HOSTED_PROVIDER_TABS) {
+      window.api.getApiKeys(provider.id).then((keys: any[]) => {
+        setExtraKeys(prev => ({
+          ...prev,
+          [provider.id]: (keys || []).filter(k => k.name !== 'Primary').map(k => ({ id: k.id, value: '', masked: k.masked })),
+        }))
+      })
+    }
+    void refreshCustomProviders()
   }, [])
+
+  const refreshCustomProviders = async () => {
+    try {
+      setCustomProviders(await window.api.listCustomProviders())
+    } catch (error) {
+      console.error('Failed to load custom providers:', error)
+    }
+  }
 
   useEffect(() => {
     void refreshBackups()
@@ -201,32 +232,26 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
     setSaving(true)
     try {
       await window.api.updateProfile({
-        gemini_api_key: primaryGoogleKey.trim(),
-        zai_api_key: primaryZhipuKey.trim(),
+        gemini_api_key: primaryKeys.google.trim(),
+        zai_api_key: primaryKeys.zhipu.trim(),
+        openai_api_key: primaryKeys.openai.trim(),
+        anthropic_api_key: primaryKeys.anthropic.trim(),
         zai_coding_plan: codingPlan ? 1 : 0,
       })
 
-      // Persist Google backup keys
-      const existingGoogle = ((await window.api.getApiKeys('google')) as any[]).filter(k => k.name !== 'Primary')
-      const keptGoogleIds = new Set(googleExtras.filter(e => e.id).map(e => e.id))
-      for (const k of existingGoogle) {
-        if (!keptGoogleIds.has(k.id)) await window.api.removeApiKey(k.id)
-      }
-      for (const e of googleExtras) {
-        if (!e.id && e.value.trim()) await window.api.addApiKey(e.value.trim(), 'google')
-      }
-
-      // Persist Zhipu backup keys
-      const existingZhipu = ((await window.api.getApiKeys('zhipu')) as any[]).filter(k => k.name !== 'Primary')
-      const keptZhipuIds = new Set(zhipuExtras.filter(e => e.id).map(e => e.id))
-      for (const k of existingZhipu) {
-        if (!keptZhipuIds.has(k.id)) await window.api.removeApiKey(k.id)
-      }
-      for (const e of zhipuExtras) {
-        if (!e.id && e.value.trim()) await window.api.addApiKey(e.value.trim(), 'zhipu')
+      // Persist backup keys per provider: add new rows, drop removed ones.
+      for (const provider of HOSTED_PROVIDER_TABS) {
+        const extras = extraKeys[provider.id]
+        const existing = ((await window.api.getApiKeys(provider.id)) as any[]).filter(k => k.name !== 'Primary')
+        const keptIds = new Set(extras.filter(e => e.id).map(e => e.id))
+        for (const k of existing) {
+          if (!keptIds.has(k.id)) await window.api.removeApiKey(k.id)
+        }
+        for (const e of extras) {
+          if (!e.id && e.value.trim()) await window.api.addApiKey(e.value.trim(), provider.id)
+        }
       }
 
-      await window.api.detectApiTier(true)
       onSaved?.()
       setSaved(true)
       setTimeout(() => setSaved(false), 1500)
@@ -235,6 +260,109 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
       alert('Failed to save API keys. Please try again.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ── Custom OpenAI-compatible endpoints ────────────────────────────────────
+
+  const startNewCustomDraft = () => {
+    setCustomError('')
+    setCustomTest(null)
+    setCustomDraft({ name: '', baseUrl: '', apiKey: '', models: [], modelInput: '' })
+  }
+
+  const startEditCustomDraft = (provider: { id: number; name: string; baseUrl: string; models: Array<{ id: string }> }) => {
+    setCustomError('')
+    setCustomTest(null)
+    setCustomDraft({ id: provider.id, name: provider.name, baseUrl: provider.baseUrl, apiKey: '', models: provider.models.map(m => m.id), modelInput: '' })
+  }
+
+  /** Accepts comma- or newline-separated ids, ignoring blanks and duplicates. */
+  const commitModelInput = () => {
+    if (!customDraft) return
+    const parts = customDraft.modelInput
+      .split(/[\n,]+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+    if (parts.length === 0) return
+    setCustomDraft(prev => prev ? {
+      ...prev,
+      models: [...prev.models, ...parts.filter(p => !prev.models.includes(p))],
+      modelInput: '',
+    } : prev)
+  }
+
+  const testCustomDraft = async () => {
+    if (!customDraft || customBusy) return
+    const model = customDraft.modelInput.trim() || customDraft.models[0]
+    if (!model) {
+      setCustomTest({ ok: false, message: 'Add at least one model before testing.' })
+      return
+    }
+    setCustomBusy('test')
+    setCustomTest(null)
+    try {
+      const result = await window.api.testCustomProvider({
+        baseUrl: customDraft.baseUrl || undefined,
+        apiKey: customDraft.apiKey || undefined,
+        model,
+        providerId: customDraft.id,
+      })
+      setCustomTest({ ok: result.ok, message: result.ok ? `Endpoint responded${result.sample ? `: "${result.sample}"` : ''}` : (result.error || 'Endpoint test failed.') })
+    } catch (error) {
+      setCustomTest({ ok: false, message: ipcErrorMessage(error, 'Endpoint test failed.') })
+    } finally {
+      setCustomBusy(null)
+    }
+  }
+
+  const saveCustomDraft = async () => {
+    if (!customDraft || customBusy) return
+    if (!customDraft.name.trim() || !customDraft.baseUrl.trim() || customDraft.models.length === 0) {
+      setCustomError('Name, base URL and at least one model are required.')
+      return
+    }
+    setCustomBusy('save')
+    setCustomError('')
+    try {
+      if (customDraft.id) {
+        await window.api.updateCustomProvider(customDraft.id, {
+          name: customDraft.name,
+          baseUrl: customDraft.baseUrl,
+          // Omit apiKey when untouched so an existing credential is kept.
+          ...(customDraft.apiKey.trim() ? { apiKey: customDraft.apiKey } : {}),
+          models: customDraft.models,
+        })
+      } else {
+        await window.api.addCustomProvider({
+          name: customDraft.name,
+          baseUrl: customDraft.baseUrl,
+          apiKey: customDraft.apiKey,
+          models: customDraft.models,
+        })
+      }
+      setCustomDraft(null)
+      await refreshCustomProviders()
+      onSaved?.()
+    } catch (error) {
+      setCustomError(ipcErrorMessage(error, 'Could not save the endpoint.'))
+    } finally {
+      setCustomBusy(null)
+    }
+  }
+
+  const removeCustomProvider = async (id: number, name: string) => {
+    if (customBusy) return
+    if (!window.confirm(`Remove the "${name}" endpoint and its models from the model picker?`)) return
+    setCustomBusy('remove')
+    try {
+      await window.api.removeCustomProvider(id)
+      await refreshCustomProviders()
+      onSaved?.()
+    } catch (error) {
+      console.error('Failed to remove custom provider:', error)
+    } finally {
+      setCustomBusy(null)
     }
   }
 
@@ -316,6 +444,102 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
     type: "spring" as const,
     stiffness: 500,
     damping: 30
+  }
+
+  // One panel shape for every hosted provider: primary key, provider-specific
+  // extras (coding-plan toggle for Z.AI), then the backup-key list.
+  const renderHostedPanel = (provider: HostedProviderId) => {
+    const tab = HOSTED_PROVIDER_TABS.find(t => t.id === provider)!
+    const extras = extraKeys[provider]
+    return (
+      <div className="space-y-6">
+        <TextField
+          label={`Primary ${tab.label} API key`}
+          value={primaryKeys[provider]}
+          onChange={(v: string) => setPrimaryKeys(prev => ({ ...prev, [provider]: v }))}
+          placeholder={tab.placeholder}
+          type="password"
+          icon={KeyRound}
+          disabled={rebuilding}
+        />
+
+        {provider === 'zhipu' && (
+          <div className="flex items-center justify-between p-5 rounded-2xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] shadow-sm transition-colors">
+            <div>
+              <div className="text-xs font-semibold text-white tracking-tight">Coding Plan Mode</div>
+              <div className="text-[10px] text-zinc-500 font-medium mt-0.5">Toggle to use dedicated endpoint: https://api.z.ai/api/coding/paas/v4</div>
+            </div>
+            <button
+              onClick={() => setCodingPlan(!codingPlan)}
+              disabled={rebuilding}
+              className={cn(
+                "w-11 h-6 rounded-full relative p-0.5 transition-colors duration-300 flex items-center border shadow-[inset_0_1px_2px_rgba(0,0,0,0.4)]",
+                codingPlan
+                  ? "bg-blue-600 border-blue-500/10"
+                  : "bg-[#0c0c0f] border-white/[0.04]"
+              )}
+            >
+              <motion.span
+                layout
+                transition={toggleSpring}
+                className="size-5 rounded-full bg-white shadow-md block"
+                style={{ marginLeft: codingPlan ? 'auto' : '0px' }}
+              />
+            </button>
+          </div>
+        )}
+
+        <AnimatePresence mode="popLayout">
+          {extras.map((k, i) => (
+            <motion.div
+              key={k.id ?? `new-${provider}-${i}`}
+              initial={{ opacity: 0, scale: 0.98, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: -10 }}
+              transition={springTransition}
+              className="flex items-end gap-3"
+            >
+              <div className="flex-1">
+                <TextField
+                  label="Backup API key"
+                  value={k.value}
+                  onChange={(v: string) => setExtraKeys(prev => ({ ...prev, [provider]: prev[provider].map((item, idx) => idx === i ? { ...item, value: v } : item) }))}
+                  placeholder={tab.placeholder}
+                  type="password"
+                  icon={KeyRound}
+                  disabled={rebuilding}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="destructive"
+                size="icon"
+                shape="square"
+                scaleOnPress
+                depthShadow
+                onClick={() => setExtraKeys(prev => ({ ...prev, [provider]: prev[provider].filter((_, idx) => idx !== i) }))}
+                disabled={rebuilding}
+                aria-label="Remove key"
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+
+        <div className="pt-2">
+          <motion.button
+            onClick={() => setExtraKeys(prev => ({ ...prev, [provider]: [...prev[provider], { value: '' }] }))}
+            disabled={rebuilding}
+            whileTap={{ scale: 0.98 }}
+            className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
+          >
+            <Plus className="size-3.5" />
+            Add backup key
+          </motion.button>
+        </div>
+      </div>
+    )
   }
 
   const containerVariants = {
@@ -557,182 +781,45 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
             Access Credentials
           </h2>
 
+          <p className="mb-8 max-w-xl text-sm leading-6 text-zinc-400">
+            Add a key for any provider — all of its models appear in the chat prompt bar, and Soxial falls back across providers when one is rate limited. Keys are verified before anything is saved.
+          </p>
+
           <div className="space-y-8">
             {/* Sliding Tab Selector */}
-            <div className="mx-auto flex w-full max-w-[260px] rounded-xl border border-input/60 bg-card p-1 relative">
-              <button
-                onClick={() => setActiveTab('google')}
-                className={cn(
-                  "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
-                  activeTab === 'google' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-                )}
-              >
-                {activeTab === 'google' && (
-                  <motion.span
-                    layoutId="activeTabBackdropProfile"
-                    className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
-                    transition={springTransition}
-                  />
-                )}
-                Google
-              </button>
-              <button
-                onClick={() => setActiveTab('zhipu')}
-                className={cn(
-                  "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
-                  activeTab === 'zhipu' ? "text-white" : "text-zinc-500 hover:text-zinc-300"
-                )}
-              >
-                {activeTab === 'zhipu' && (
-                  <motion.span
-                    layoutId="activeTabBackdropProfile"
-                    className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
-                    transition={springTransition}
-                  />
-                )}
-                Z.AI
-              </button>
+            <div className="mx-auto flex w-full max-w-[440px] rounded-xl border border-input/60 bg-card p-1 relative">
+              {HOSTED_PROVIDER_TABS.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    "relative z-10 flex-1 rounded-lg py-2 text-xs font-semibold tracking-wide transition-colors duration-300",
+                    activeTab === tab.id ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+                  )}
+                >
+                  {activeTab === tab.id && (
+                    <motion.span
+                      layoutId="activeTabBackdropProfile"
+                      className="absolute inset-0 rounded-lg border border-white/[0.06] bg-white/[0.06] shadow-sm"
+                      transition={springTransition}
+                    />
+                  )}
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
-                <AnimatePresence mode="wait">
-                  {activeTab === 'google' ? (
-                    <motion.div 
-                      key="google"
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -6 }}
-                      transition={{ duration: 0.2 }}
-                      className="space-y-6"
-                    >
-                      {/* Primary Key */}
-                      <TextField label="Primary API key" value={primaryGoogleKey} onChange={setPrimaryGoogleKey} placeholder="AIza..." type="password" icon={KeyRound} disabled={rebuilding} />
-
-                      {/* Google Backup Keys */}
-                      <AnimatePresence mode="popLayout">
-                        {googleExtras.map((k, i) => (
-                          <motion.div 
-                            key={k.id ?? `new-g-${i}`} 
-                            initial={{ opacity: 0, scale: 0.98, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.98, y: -10 }}
-                            transition={springTransition}
-                            className="flex items-end gap-3"
-                          >
-                            <div className="flex-1">
-                              <TextField label="Backup API key" value={k.value} onChange={(v: string) => setGoogleExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: v } : item))} placeholder="AIza..." type="password" icon={KeyRound} disabled={rebuilding} />
-                            </div>
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="icon"
-                              shape="square"
-                              scaleOnPress
-                              depthShadow
-                              onClick={() => setGoogleExtras(prev => prev.filter((_, idx) => idx !== i))}
-                              disabled={rebuilding}
-                              aria-label="Remove key"
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </motion.div>
-                        ))}
-                      </AnimatePresence>
-
-                      <div className="pt-2">
-                        <motion.button
-                          onClick={() => setGoogleExtras(prev => [...prev, { value: '' }])}
-                          disabled={rebuilding}
-                          whileTap={{ scale: 0.98 }}
-                          className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
-                        >
-                          <Plus className="size-3.5" />
-                          Add backup key
-                        </motion.button>
-                      </div>
-                    </motion.div>
-                  ) : (
-                    <motion.div 
-                      key="zhipu"
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -6 }}
-                      transition={{ duration: 0.2 }}
-                      className="space-y-6"
-                    >
-                      {/* Primary Zhipu Key */}
-                      <TextField label="Primary Z.AI API key" value={primaryZhipuKey} onChange={setPrimaryZhipuKey} placeholder="ZAI_api_key..." type="password" icon={KeyRound} disabled={rebuilding} />
-
-                      {/* Coding Plan toggle */}
-                      <div className="flex items-center justify-between p-5 rounded-2xl bg-white/[0.01] hover:bg-white/[0.02] border border-white/[0.04] shadow-sm transition-colors">
-                        <div>
-                          <div className="text-xs font-semibold text-white tracking-tight">Coding Plan Mode</div>
-                          <div className="text-[10px] text-zinc-500 font-medium mt-0.5">Toggle to use dedicated endpoint: https://api.z.ai/api/coding/paas/v4</div>
-                        </div>
-                        {/* Apple style physical switch */}
-                        <button
-                          onClick={() => setCodingPlan(!codingPlan)}
-                          disabled={rebuilding}
-                          className={cn(
-                            "w-11 h-6 rounded-full relative p-0.5 transition-colors duration-300 flex items-center border shadow-[inset_0_1px_2px_rgba(0,0,0,0.4)]",
-                            codingPlan 
-                              ? "bg-blue-600 border-blue-500/10" 
-                              : "bg-[#0c0c0f] border-white/[0.04]"
-                          )}
-                        >
-                          <motion.span 
-                            layout
-                            transition={toggleSpring}
-                            className="size-5 rounded-full bg-white shadow-md block" 
-                            style={{ marginLeft: codingPlan ? 'auto' : '0px' }}
-                          />
-                        </button>
-                      </div>
-
-                      {/* Zhipu Backup Keys */}
-                      <AnimatePresence mode="popLayout">
-                        {zhipuExtras.map((k, i) => (
-                          <motion.div 
-                            key={k.id ?? `new-z-${i}`} 
-                            initial={{ opacity: 0, scale: 0.98, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.98, y: -10 }}
-                            transition={springTransition}
-                            className="flex items-end gap-3"
-                          >
-                            <div className="flex-1">
-                              <TextField label="Backup API key" value={k.value} onChange={(v: string) => setZhipuExtras(prev => prev.map((item, idx) => idx === i ? { ...item, value: v } : item))} placeholder="ZAI_api_key..." type="password" icon={KeyRound} disabled={rebuilding} />
-                            </div>
-                            <Button
-                              type="button"
-                              variant="destructive"
-                              size="icon"
-                              shape="square"
-                              scaleOnPress
-                              depthShadow
-                              onClick={() => setZhipuExtras(prev => prev.filter((_, idx) => idx !== i))}
-                              disabled={rebuilding}
-                              aria-label="Remove key"
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </motion.div>
-                        ))}
-                      </AnimatePresence>
-
-                      <div className="pt-2">
-                        <motion.button
-                          onClick={() => setZhipuExtras(prev => [...prev, { value: '' }])}
-                          disabled={rebuilding}
-                          whileTap={{ scale: 0.98 }}
-                          className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors font-semibold ml-1 mt-1"
-                        >
-                          <Plus className="size-3.5" />
-                          Add backup key
-                        </motion.button>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeTab}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.2 }}
+              >
+                {renderHostedPanel(activeTab)}
+              </motion.div>
+            </AnimatePresence>
 
             {/* Save Button */}
           <div className="flex justify-end pt-1">
@@ -743,7 +830,7 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
               shape="round"
               scaleOnPress
               depthShadow
-              disabled={rebuilding || saving || (!primaryGoogleKey.trim() && !primaryZhipuKey.trim() && !googleExtras.some(e => e.value.trim()) && !zhipuExtras.some(e => e.value.trim()))}
+              disabled={rebuilding || saving || !HOSTED_PROVIDER_TABS.some(({ id }) => primaryKeys[id].trim() || extraKeys[id].some(e => e.value.trim()))}
             >
               {saving ? (
                 <span className="animate-pulse">Saving...</span>
@@ -757,6 +844,223 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
               )}
             </Button>
             </div>
+          </div>
+
+          {/* Custom OpenAI-compatible endpoints */}
+          <div className="mt-16 space-y-6 border-t border-white/5 pt-10">
+            <div className="space-y-2">
+              <h2 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
+                Custom endpoints
+              </h2>
+              <p className="max-w-xl text-sm leading-6 text-zinc-400">
+                Any OpenAI-compatible API — vLLM, Ollama, LM Studio, OpenRouter, gateways. Define the endpoint once and add every model name it serves; each one shows up in the chat prompt bar.
+              </p>
+            </div>
+
+            {customProviders.length > 0 && (
+              <div className="space-y-3">
+                {customProviders.map(provider => (
+                  <div key={provider.id} className="rounded-2xl border border-white/[0.05] bg-white/[0.01] p-5">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-white">{provider.name}</div>
+                        <div className="mt-0.5 truncate text-xs text-zinc-500">{provider.baseUrl}</div>
+                        <div className="mt-2.5 flex flex-wrap gap-1.5">
+                          {provider.models.slice(0, 6).map(model => (
+                            <span key={model.id} className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-zinc-300">
+                              {model.label}
+                            </span>
+                          ))}
+                          {provider.models.length > 6 && (
+                            <span className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-zinc-500">
+                              +{provider.models.length - 6} more
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-2.5 text-[10px] font-medium text-zinc-600">
+                          {provider.hasKey ? `API key ${provider.keyMasked}` : 'No API key set'}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          shape="round"
+                          scaleOnPress
+                          depthShadow
+                          onClick={() => startEditCustomDraft(provider)}
+                          disabled={customBusy !== null}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="icon"
+                          shape="square"
+                          scaleOnPress
+                          depthShadow
+                          onClick={() => void removeCustomProvider(provider.id, provider.name)}
+                          disabled={customBusy !== null}
+                          aria-label={`Remove ${provider.name}`}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {customDraft ? (
+              <div className="space-y-5 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6 md:p-8">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-white">
+                    {customDraft.id ? 'Edit endpoint' : 'New endpoint'}
+                  </span>
+                  <button
+                    onClick={() => { setCustomDraft(null); setCustomError(''); setCustomTest(null) }}
+                    disabled={customBusy !== null}
+                    className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500 transition-colors hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <TextField
+                    label="Name"
+                    value={customDraft.name}
+                    onChange={(v: string) => setCustomDraft(prev => prev ? { ...prev, name: v } : prev)}
+                    placeholder="OpenRouter"
+                    disabled={customBusy !== null}
+                  />
+                  <TextField
+                    label="Base URL"
+                    value={customDraft.baseUrl}
+                    onChange={(v: string) => setCustomDraft(prev => prev ? { ...prev, baseUrl: v } : prev)}
+                    placeholder="https://openrouter.ai/api/v1"
+                    disabled={customBusy !== null}
+                  />
+                </div>
+
+                <TextField
+                  label="API key"
+                  value={customDraft.apiKey}
+                  onChange={(v: string) => setCustomDraft(prev => prev ? { ...prev, apiKey: v } : prev)}
+                  placeholder={customDraft.id ? 'Stored — leave blank to keep' : 'Optional if the endpoint needs no auth'}
+                  type="password"
+                  icon={KeyRound}
+                  disabled={customBusy !== null}
+                />
+
+                <div className="space-y-2">
+                  <label className="ml-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">
+                    Models — add as many as the endpoint serves
+                  </label>
+                  <div className="flex items-end gap-3">
+                    <div className="flex-1">
+                      <TextField
+                        value={customDraft.modelInput}
+                        onChange={(v: string) => setCustomDraft(prev => prev ? { ...prev, modelInput: v } : prev)}
+                        placeholder="model name — Enter to add (comma-separated OK)"
+                        disabled={customBusy !== null}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && customDraft.modelInput.trim()) {
+                            e.preventDefault()
+                            commitModelInput()
+                          }
+                        }}
+                      />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="default"
+                      shape="round"
+                      scaleOnPress
+                      depthShadow
+                      onClick={commitModelInput}
+                      disabled={customBusy !== null || !customDraft.modelInput.trim()}
+                    >
+                      <Plus className="size-4" />
+                      Add
+                    </Button>
+                  </div>
+                  {customDraft.models.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {customDraft.models.map(model => (
+                        <button
+                          key={model}
+                          type="button"
+                          onClick={() => setCustomDraft(prev => prev ? { ...prev, models: prev.models.filter(m => m !== model) } : prev)}
+                          disabled={customBusy !== null}
+                          aria-label={`Remove model ${model}`}
+                          className="group inline-flex items-center gap-1.5 rounded-full border border-white/[0.06] bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-200"
+                        >
+                          {model}
+                          <span className="text-zinc-600 group-hover:text-red-300">×</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {customError && (
+                  <div role="alert" className="rounded-xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-xs leading-5 text-red-200">
+                    {customError}
+                  </div>
+                )}
+                {customTest && (
+                  <div
+                    role={customTest.ok ? 'status' : 'alert'}
+                    aria-live="polite"
+                    className={cn(
+                      'rounded-xl px-4 py-3 text-xs leading-5',
+                      customTest.ok
+                        ? 'border border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-200'
+                        : 'border border-red-500/20 bg-red-500/[0.06] text-red-200'
+                    )}
+                  >
+                    {customTest.message}
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-3 pt-1 sm:flex-row">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    shape="round"
+                    scaleOnPress
+                    depthShadow
+                    onClick={() => void testCustomDraft()}
+                    disabled={customBusy !== null}
+                  >
+                    {customBusy === 'test' ? 'Testing…' : 'Test endpoint'}
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    shape="round"
+                    scaleOnPress
+                    depthShadow
+                    onClick={() => void saveCustomDraft()}
+                    disabled={customBusy !== null}
+                  >
+                    {customBusy === 'save' ? 'Saving…' : customDraft.id ? 'Save changes' : 'Add endpoint'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <motion.button
+                onClick={startNewCustomDraft}
+                disabled={rebuilding || customBusy !== null}
+                whileTap={{ scale: 0.98 }}
+                className="ml-1 mt-1 flex items-center gap-1.5 text-xs font-semibold text-zinc-500 transition-colors hover:text-white"
+              >
+                <Plus className="size-3.5" />
+                Add custom endpoint
+              </motion.button>
+            )}
           </div>
         </motion.section>
         )}

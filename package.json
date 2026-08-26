@@ -32,7 +32,9 @@
     "npm": ">=11 <12"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.42",
     "@ai-sdk/google": "^4.0.8",
+    "@ai-sdk/openai": "^4.0.47",
     "@google/genai": "^2.10.0",
     "@heyputer/puter.js": "^2.5.4",
     "@icons-pack/react-simple-icons": "^13.13.0",
