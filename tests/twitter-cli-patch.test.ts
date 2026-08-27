@@ -180,4 +180,18 @@ describe('patch-twitter-cli.cjs (#45)', () => {
     expect(patched).toMatchObject({ ok: true, patched: false, reason: 'already patched' })
     expect(patched.checkFailed).toBeUndefined()
   })
+
+  it('exit-code policy: not-installed soft-skips, drift blocks, check flags unpatched', () => {
+    const { cliExitCode } = require('../scripts/patch-twitter-cli.cjs')
+    // Not installed → exit 0 so CI builds never break on machines without
+    // the CLI (ensureCliInstalled applies the patch post-install instead).
+    expect(cliExitCode({ ok: false, reason: 'twitter-cli client.py not found (is the tool installed?)' })).toBe(0)
+    // Anchor drift → hard failure.
+    expect(cliExitCode({ ok: false, reason: 'client.py no longer contains the expected … anchors.' })).toBe(2)
+    // --check on an unpatched CLI → guard failure.
+    expect(cliExitCode({ ok: true, checkFailed: true })).toBe(1)
+    // Applied / already patched / clean check → success.
+    expect(cliExitCode({ ok: true, patched: true })).toBe(0)
+    expect(cliExitCode({ ok: true, patched: false, reason: 'already patched' })).toBe(0)
+  })
 })
