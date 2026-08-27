@@ -175,17 +175,26 @@ function applyTwitterCliPatch(options = {}) {
   return { ok: true, patched: true, path: clientPy }
 }
 
-module.exports = { applyTwitterCliPatch, resolveClientPy, MARKER, _internals: { applyPatches } }
+/** Exit-code policy: not-installed soft-skips (CI must never break on a
+ *  machine without the CLI); anchor drift blocks; --check flags unpatched. */
+function cliExitCode(result) {
+  if (!result.ok) return result.reason.includes('not found') ? 0 : 2
+  if (result.checkFailed) return 1
+  return 0
+}
+
+module.exports = { applyTwitterCliPatch, resolveClientPy, cliExitCode, MARKER, _internals: { applyPatches } }
 
 if (require.main === module) {
   const checkOnly = process.argv.includes('--check')
   const result = applyTwitterCliPatch({ checkOnly })
-  if (!result.ok) {
+  const code = cliExitCode(result)
+  if (code === 0) {
+    console.log(
+      `[patch-twitter-cli] ${result.patched ? 'patched' : 'skipped'} ${result.path ?? ''} (${result.reason})`.trim(),
+    )
+  } else {
     console.error(`[patch-twitter-cli] FAILED: ${result.reason}`)
-    process.exit(2)
   }
-  console.log(
-    `[patch-twitter-cli] ${result.patched ? 'patched' : 'skipped'} ${result.path} (${result.reason || 'applied authed-transaction v1'})`,
-  )
-  if (checkOnly && result.checkFailed) process.exit(1)
+  process.exit(code)
 }
