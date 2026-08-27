@@ -167,6 +167,10 @@ function applyTwitterCliPatch(options = {}) {
   if (result.alreadyPatched) {
     return { ok: true, patched: false, reason: 'already patched', path: clientPy }
   }
+  if (options.checkOnly) {
+    // Guard mode: report the unpatched state without touching the file.
+    return { ok: true, patched: false, reason: 'not applied', path: clientPy, checkFailed: true }
+  }
   fs.writeFileSync(clientPy, result.source, 'utf8')
   return { ok: true, patched: true, path: clientPy }
 }
@@ -175,7 +179,7 @@ module.exports = { applyTwitterCliPatch, resolveClientPy, MARKER, _internals: { 
 
 if (require.main === module) {
   const checkOnly = process.argv.includes('--check')
-  const result = applyTwitterCliPatch()
+  const result = applyTwitterCliPatch({ checkOnly })
   if (!result.ok) {
     console.error(`[patch-twitter-cli] FAILED: ${result.reason}`)
     process.exit(2)
@@ -183,5 +187,5 @@ if (require.main === module) {
   console.log(
     `[patch-twitter-cli] ${result.patched ? 'patched' : 'skipped'} ${result.path} (${result.reason || 'applied authed-transaction v1'})`,
   )
-  if (checkOnly && !result.patched && result.reason !== 'already patched') process.exit(1)
+  if (checkOnly && result.checkFailed) process.exit(1)
 }

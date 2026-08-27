@@ -167,4 +167,17 @@ describe('patch-twitter-cli.cjs (#45)', () => {
     expect(result.ok).toBe(false)
     expect(result.reason).toContain('not found')
   })
+
+  it('check mode guards without applying: exit-flagged when unpatched, clean when patched', () => {
+    const pristine = fixturePath()
+    const unpatched = applyTwitterCliPatch({ clientPy: pristine, checkOnly: true })
+    expect(unpatched).toMatchObject({ ok: true, checkFailed: true })
+    // Guard mode must not write.
+    expect(readFileSync(pristine, 'utf8')).not.toContain(MARKER)
+
+    applyTwitterCliPatch({ clientPy: pristine })
+    const patched = applyTwitterCliPatch({ clientPy: pristine, checkOnly: true })
+    expect(patched).toMatchObject({ ok: true, patched: false, reason: 'already patched' })
+    expect(patched.checkFailed).toBeUndefined()
+  })
 })
