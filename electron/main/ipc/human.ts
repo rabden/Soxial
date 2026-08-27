@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron'
 import {
   clampHumanCount,
+  extractHumanItems,
+  HUMAN_CLI_HARD_CAP,
   mapCliError,
   normalizeHumanUser,
   runHumanTwitterCli,
@@ -114,5 +116,24 @@ export function registerHumanHandlers(): void {
     const res = await runHumanTwitterCli(args)
     if (!res.ok) return { ok: false as const, error: mapCliError(res) }
     return { ok: true as const, data: toWindowedHumanPage(res, count) }
+  })
+
+  ipcMain.handle('human:bookmarks', async (_event, request: { count?: number } = {}) => {
+    const session = await verifyHumanSession()
+    if (!session.ok) return authError(session)
+
+    // No cursor for bookmarks — pages grow the requested count toward the
+    // connector's 200 hard cap, then stop (contract §2). Note: this clamp
+    // allows up to 200 (unlike the generic 100-count clamp for feed/search).
+    const rawCount = typeof request.count === 'number' && Number.isFinite(request.count)
+      ? Math.floor(request.count)
+      : 10
+    const count = Math.min(Math.max(rawCount, 1), HUMAN_CLI_HARD_CAP)
+    const res = await runHumanTwitterCli(['bookmarks', '--json', '-n', String(count)])
+    if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+
+    const items = extractHumanItems(res)
+    const hasMore = items.length >= count && count < HUMAN_CLI_HARD_CAP
+    return { ok: true as const, data: { items, hasMore } }
   })
 }

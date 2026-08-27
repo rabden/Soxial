@@ -30,6 +30,9 @@ beforeEach(() => {
     api: {
       platform: 'linux',
       humanFeed: async () => ({ ok: true, data: { items: [], hasMore: false } }),
+      humanProfile: async () => ({ ok: true, data: { screenName: 'me', name: 'Me' } }),
+      humanProfilePosts: async () => ({ ok: true, data: { items: [], hasMore: false } }),
+      humanBookmarks: async () => ({ ok: true, data: { items: [], hasMore: false } }),
       humanVerifySession: async () => ({ ok: true, data: { authenticated: true, user: null } }),
     },
   }
@@ -94,22 +97,16 @@ describe('Human Mode UI — window API / component seam', () => {
 
   it('renders the HumanPage tab bar, switches tabs, and locks tabs when disabled', async () => {
     const onTabChange = vi.fn()
-    const { rerender } = render(
-      <HumanPage activeTab="feed" onTabChange={onTabChange} profile={{ name: 'Test User' }} />
-    )
+    const { rerender } = render(<HumanPage activeTab="feed" onTabChange={onTabChange} />)
     expect(await screen.findByText('No posts yet')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /bookmarks/i }))
     expect(onTabChange).toHaveBeenCalledWith('bookmarks')
 
-    rerender(
-      <HumanPage activeTab="bookmarks" onTabChange={onTabChange} profile={{ name: 'Test User' }} />
-    )
-    expect(screen.getByText('Saved posts and threads for easy reference later.')).toBeTruthy()
+    rerender(<HumanPage activeTab="bookmarks" onTabChange={onTabChange} />)
+    expect(await screen.findByText('No bookmarks')).toBeTruthy()
 
-    rerender(
-      <HumanPage activeTab="bookmarks" onTabChange={onTabChange} profile={{ name: 'Test User' }} disabled />
-    )
+    rerender(<HumanPage activeTab="bookmarks" onTabChange={onTabChange} disabled />)
     expect((screen.getByRole('button', { name: /search/i }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

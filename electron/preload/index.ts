@@ -37,6 +37,7 @@ const api = {
   humanProfile: () => ipcRenderer.invoke('human:profile'),
   humanProfilePosts: (request: { subTab: 'posts' | 'replies'; count?: number; until?: string }) =>
     ipcRenderer.invoke('human:profilePosts', request),
+  humanBookmarks: (request: { count?: number }) => ipcRenderer.invoke('human:bookmarks', request),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),
   runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages, runId),
