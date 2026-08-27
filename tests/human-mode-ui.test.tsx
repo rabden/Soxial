@@ -23,9 +23,16 @@ vi.mock('motion/react', async () => {
 import Sidebar from 'src/components/Sidebar'
 import HumanPage from 'src/features/human'
 
-// Sidebar header reads window.api.platform for the macOS inset.
+// Sidebar header reads window.api.platform for the macOS inset; HumanPage's
+// feed tab now fetches through window.api.humanFeed (stubbed to an empty page).
 beforeEach(() => {
-  ;(globalThis as any).window = { api: { platform: 'linux' } }
+  ;(globalThis as any).window = {
+    api: {
+      platform: 'linux',
+      humanFeed: async () => ({ ok: true, data: { items: [], hasMore: false } }),
+      humanVerifySession: async () => ({ ok: true, data: { authenticated: true, user: null } }),
+    },
+  }
 })
 
 // No vitest globals → no RTL auto-cleanup; do it explicitly.
@@ -85,12 +92,12 @@ describe('Human Mode UI — window API / component seam', () => {
     expect((screen.getByRole('button', { name: /human/i }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('renders the HumanPage tab bar, switches tabs, and locks tabs when disabled', () => {
+  it('renders the HumanPage tab bar, switches tabs, and locks tabs when disabled', async () => {
     const onTabChange = vi.fn()
     const { rerender } = render(
       <HumanPage activeTab="feed" onTabChange={onTabChange} profile={{ name: 'Test User' }} />
     )
-    expect(screen.getByText('Your Feed')).toBeTruthy()
+    expect(await screen.findByText('No posts yet')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /bookmarks/i }))
     expect(onTabChange).toHaveBeenCalledWith('bookmarks')

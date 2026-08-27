@@ -31,6 +31,9 @@ const api = {
   checkCliAuth: (name: 'twitter' | 'rdt') => ipcRenderer.invoke('cli:checkAuth', name),
   twitterTweet: (tweetId: string, max?: number) => ipcRenderer.invoke('cli:twitterTweet', tweetId, max),
   redditRead: (postId: string, maxComments?: number) => ipcRenderer.invoke('cli:redditRead', postId, maxComments),
+  humanFeed: (request: { type?: 'for-you' | 'following'; count?: number; cursor?: string }) =>
+    ipcRenderer.invoke('human:feed', request),
+  humanVerifySession: () => ipcRenderer.invoke('human:verifySession'),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),
   runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages, runId),

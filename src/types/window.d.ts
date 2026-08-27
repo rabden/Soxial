@@ -17,6 +17,8 @@ interface Window {
     checkCliAuth: (name: 'twitter' | 'rdt') => Promise<any>
     twitterTweet: (tweetId: string, max?: number) => Promise<any>
     redditRead: (postId: string, maxComments?: number) => Promise<any>
+    humanFeed: (request: import('../features/human/types').HumanFeedRequest) => Promise<import('../features/human/types').HumanResult<import('../features/human/types').Paginated<import('../features/human/types').HumanTweet>>>
+    humanVerifySession: () => Promise<import('../features/human/types').HumanSessionResult>
     prepareOnboarding: () => Promise<{ runId: string }>
     runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => Promise<any>
     resumeOnboarding: (runId: string) => Promise<any>
