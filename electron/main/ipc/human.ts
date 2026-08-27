@@ -14,6 +14,7 @@ import {
   type HumanSessionResult,
 } from '../human-connector'
 import { normalizeTwitterHandle } from '../twitter-handle'
+import { isTwitterHandleRebuildActive } from '../twitter-handle-rebuild'
 
 export interface HumanFeedRequest {
   type?: 'for-you' | 'following'
@@ -26,6 +27,11 @@ export interface HumanProfilePostsRequest {
   count?: number
   /** Date window (YYYY-MM-DD): only items older than this day (X `until:`). */
   until?: string
+}
+
+export interface HumanFollowListRequest {
+  subTab: 'following' | 'followers'
+  count?: number
 }
 
 function authError(session: Extract<HumanSessionResult, { ok: false }>) {
@@ -136,4 +142,59 @@ export function registerHumanHandlers(): void {
     const hasMore = items.length >= count && count < HUMAN_CLI_HARD_CAP
     return { ok: true as const, data: { items, hasMore } }
   })
+
+  ipcMain.handle('human:followList', async (_event, request: HumanFollowListRequest) => {
+    const guarded = await requireSessionHandle()
+    if (!guarded.ok) return { ok: false as const, error: guarded.error }
+
+    // Same count-growth strategy as bookmarks (no cursor, 200 cap).
+    const rawCount =
+      typeof request?.count === 'number' && Number.isFinite(request.count) ? Math.floor(request.count) : 10
+    const count = Math.min(Math.max(rawCount, 1), HUMAN_CLI_HARD_CAP)
+    const args = [request?.subTab === 'followers' ? 'followers' : 'following', guarded.handle, '--json', '-n', String(count)]
+
+    const res = await runHumanTwitterCli(args)
+    if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+
+    const items = extractHumanItems(res)
+      .map((raw) => normalizeHumanUser(raw))
+      .filter((user) => user !== null)
+    const hasMore = items.length >= count && count < HUMAN_CLI_HARD_CAP
+    return { ok: true as const, data: { items, hasMore } }
+  })
+
+  ipcMain.handle(
+    'human:followAction',
+    async (_event, request: { handle?: string; action?: 'follow' | 'unfollow' }) => {
+      const session = await verifyHumanSession()
+      if (!session.ok) return authError(session)
+
+      // Writes are blocked while a handle rebuild is active (mirrors the
+      // profile-update guard) — the rebuild owns the relationship state.
+      if (isTwitterHandleRebuildActive()) {
+        return {
+          ok: false as const,
+          error: mapCliError({
+            error: 'Profile rebuild in progress — follow actions resume when it finishes.',
+            errorCode: 'invalid_input',
+          }),
+        }
+      }
+
+      let handle: string
+      try {
+        handle = normalizeTwitterHandle(String(request?.handle ?? ''))
+      } catch {
+        return {
+          ok: false as const,
+          error: mapCliError({ error: `Invalid X handle: ${request?.handle}`, errorCode: 'invalid_input' }),
+        }
+      }
+      const action = request?.action === 'unfollow' ? 'unfollow' : 'follow'
+
+      const res = await runHumanTwitterCli([action, handle, '--json'])
+      if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+      return { ok: true as const, data: { handle, following: action === 'follow' } }
+    },
+  )
 }

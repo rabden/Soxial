@@ -38,6 +38,10 @@ const api = {
   humanProfilePosts: (request: { subTab: 'posts' | 'replies'; count?: number; until?: string }) =>
     ipcRenderer.invoke('human:profilePosts', request),
   humanBookmarks: (request: { count?: number }) => ipcRenderer.invoke('human:bookmarks', request),
+  humanFollowList: (request: { subTab: 'following' | 'followers'; count?: number }) =>
+    ipcRenderer.invoke('human:followList', request),
+  humanFollowAction: (request: { handle: string; action: 'follow' | 'unfollow' }) =>
+    ipcRenderer.invoke('human:followAction', request),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),
   runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages, runId),
