@@ -33,16 +33,21 @@ function normalizeCliEnvelope(parsed: any, code: number, stderr: string): CliRes
     data = parsed
   }
   let error: string | undefined
+  let errorCode: string | undefined
   if (!ok) {
     if (typeof parsed.error === 'object' && parsed.error?.message) {
       error = parsed.error.message
+      if (typeof parsed.error.code === 'string') errorCode = parsed.error.code
     } else if (typeof parsed.error === 'string') {
       error = parsed.error
     } else {
       error = stderr.trim() || `Exit code ${code}`
     }
   }
-  return { ok, data: data ?? null, error }
+  // Cursor-native list commands (`feed`, `list`) emit { pagination: { nextCursor } }.
+  const nextCursor =
+    typeof parsed.pagination?.nextCursor === 'string' ? parsed.pagination.nextCursor : undefined
+  return { ok, data: data ?? null, error, errorCode, nextCursor }
 }
 
 async function findBin(name: string): Promise<string | null> {
@@ -106,18 +111,42 @@ export async function ensureCliInstalled(name: 'twitter' | 'rdt'): Promise<boole
   }
 }
 
-export async function runCli(bin: 'twitter' | 'rdt', args: string[]): Promise<CliResult> {
+export async function runCli(
+  bin: 'twitter' | 'rdt',
+  args: string[],
+  options?: { timeoutMs?: number },
+): Promise<CliResult> {
   const cmd = `${bin} ${args.join(' ')}`
   logger.info('cli', `running: ${cmd}`)
   return new Promise((resolve) => {
     const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    if (options?.timeoutMs && options.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        child.kill('SIGKILL')
+        logger.warn('cli', `timeout after ${options.timeoutMs}ms: ${cmd}`)
+        resolve({
+          ok: false,
+          data: null,
+          error: `Command timed out after ${options.timeoutMs}ms`,
+          errorCode: 'network_error',
+        })
+      }, options.timeoutMs)
+    }
 
     child.stdout.on('data', (d) => { stdout += d.toString() })
     child.stderr.on('data', (d) => { stderr += d.toString() })
 
     child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
       logger.debug('cli', `exit code ${code}`, { stdout: stdout.slice(0, 500), stderr: stderr.slice(0, 500) })
       try {
         const parsed = parseCliStdout(stdout)
@@ -133,6 +162,9 @@ export async function runCli(bin: 'twitter' | 'rdt', args: string[]): Promise<Cl
     })
 
     child.on('error', (err) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
       logger.error('cli', `spawn error: ${cmd}`, err.message)
       resolve({ ok: false, data: null, error: err.message })
     })
@@ -143,13 +175,20 @@ export interface CliResult {
   ok: boolean
   data: any
   error?: string
+  /** Structured connector error code (`not_authenticated`, `rate_limited`, …). */
+  errorCode?: string
+  /** `pagination.nextCursor` from cursor-native list commands (`feed`, `list`). */
+  nextCursor?: string
 }
 
 /** Run the X connector. Compact `-c` is a global flag and must precede the subcommand. */
-export async function runTwitterCli(args: string[], options?: { compact?: boolean }): Promise<CliResult> {
+export async function runTwitterCli(
+  args: string[],
+  options?: { compact?: boolean; timeoutMs?: number },
+): Promise<CliResult> {
   const compact = options?.compact !== false
   const fullArgs = compact ? ['-c', ...args] : args
-  return runCli('twitter', fullArgs)
+  return runCli('twitter', fullArgs, options)
 }
 
 /** Verify Twitter session via browser cookies (auto-extracted on first use). */

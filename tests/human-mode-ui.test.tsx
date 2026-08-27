@@ -6,26 +6,23 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 // framer-motion's projection layer expects a real browser document. These
 // tests assert navigation behaviour, not animation, so collapse motion to
 // identity elements.
-vi.mock('motion/react', async () => {
-  const React = await import('react')
-  const identity =
-    (tag: string) =>
-    ({ children, ...props }: any) =>
-      React.createElement(tag, props, children)
-  return {
-    motion: new Proxy(
-      {},
-      { get: (_t, tag: string) => identity(tag) }
-    ),
-    AnimatePresence: ({ children }: any) => React.createElement(React.Fragment, null, children),
-  }
-})
+vi.mock('motion/react', () => import('./helpers/human-ui-mocks').then((m) => m.motionReactMock))
 import Sidebar from 'src/components/Sidebar'
 import HumanPage from 'src/features/human'
 
-// Sidebar header reads window.api.platform for the macOS inset.
+// Sidebar header reads window.api.platform for the macOS inset; HumanPage's
+// feed tab now fetches through window.api.humanFeed (stubbed to an empty page).
 beforeEach(() => {
-  ;(globalThis as any).window = { api: { platform: 'linux' } }
+  ;(globalThis as any).window = {
+    api: {
+      platform: 'linux',
+      humanFeed: async () => ({ ok: true, data: { items: [], hasMore: false } }),
+      humanProfile: async () => ({ ok: true, data: { screenName: 'me', name: 'Me' } }),
+      humanProfilePosts: async () => ({ ok: true, data: { items: [], hasMore: false } }),
+      humanBookmarks: async () => ({ ok: true, data: { items: [], hasMore: false } }),
+      humanVerifySession: async () => ({ ok: true, data: { authenticated: true, user: null } }),
+    },
+  }
 })
 
 // No vitest globals → no RTL auto-cleanup; do it explicitly.
@@ -85,24 +82,18 @@ describe('Human Mode UI — window API / component seam', () => {
     expect((screen.getByRole('button', { name: /human/i }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('renders the HumanPage tab bar, switches tabs, and locks tabs when disabled', () => {
+  it('renders the HumanPage tab bar, switches tabs, and locks tabs when disabled', async () => {
     const onTabChange = vi.fn()
-    const { rerender } = render(
-      <HumanPage activeTab="feed" onTabChange={onTabChange} profile={{ name: 'Test User' }} />
-    )
-    expect(screen.getByText('Your Feed')).toBeTruthy()
+    const { rerender } = render(<HumanPage activeTab="feed" onTabChange={onTabChange} />)
+    expect(await screen.findByText('No posts yet')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /bookmarks/i }))
     expect(onTabChange).toHaveBeenCalledWith('bookmarks')
 
-    rerender(
-      <HumanPage activeTab="bookmarks" onTabChange={onTabChange} profile={{ name: 'Test User' }} />
-    )
-    expect(screen.getByText('Saved posts and threads for easy reference later.')).toBeTruthy()
+    rerender(<HumanPage activeTab="bookmarks" onTabChange={onTabChange} />)
+    expect(await screen.findByText('No bookmarks')).toBeTruthy()
 
-    rerender(
-      <HumanPage activeTab="bookmarks" onTabChange={onTabChange} profile={{ name: 'Test User' }} disabled />
-    )
+    rerender(<HumanPage activeTab="bookmarks" onTabChange={onTabChange} disabled />)
     expect((screen.getByRole('button', { name: /search/i }) as HTMLButtonElement).disabled).toBe(true)
   })
 })

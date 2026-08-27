@@ -1,8 +1,12 @@
 import { useState } from 'react'
 import { motion } from 'motion/react'
-import { Newspaper, User, Bookmark, UserPlus, Search } from 'lucide-react'
 import type { HumanTab } from './types'
 import { HUMAN_NAV_ITEMS } from './navigation'
+import HumanFeed from './components/HumanFeed'
+import HumanProfile from './components/HumanProfile'
+import HumanBookmarks from './components/HumanBookmarks'
+import HumanFollow from './components/HumanFollow'
+import HumanSearch from './components/HumanSearch'
 
 const springTransition = {
   type: 'spring' as const,
@@ -13,7 +17,6 @@ const springTransition = {
 interface HumanPageProps {
   activeTab?: HumanTab
   onTabChange?: (tab: HumanTab) => void
-  profile?: any
   /** Rebuild lock: tabs are inert while a handle rebuild runs (matches Sidebar). */
   disabled?: boolean
 }
@@ -21,7 +24,6 @@ interface HumanPageProps {
 export default function HumanPage({
   activeTab: controlledTab,
   onTabChange,
-  profile,
   disabled = false,
 }: HumanPageProps) {
   const [localTab, setLocalTab] = useState<HumanTab>('feed')
@@ -74,59 +76,17 @@ export default function HumanPage({
       </div>
 
       {/* Tab Content Area */}
-      <div className="flex-1 overflow-y-auto p-6 scrollbar-none max-w-4xl mx-auto w-full">
-        {currentTab === 'feed' && (
-          <div className="flex flex-col items-center justify-center min-h-[300px] text-center text-zinc-500 space-y-2">
-            <Newspaper className="size-10 text-zinc-700 stroke-1" />
-            <h3 className="text-base font-semibold text-zinc-300">Your Feed</h3>
-            <p className="text-xs text-zinc-600 max-w-sm">
-              Discover posts and updates from your network in real-time.
-            </p>
-          </div>
-        )}
-
-        {currentTab === 'profile' && (
-          <div className="flex flex-col items-center justify-center min-h-[300px] text-center text-zinc-500 space-y-2">
-            <User className="size-10 text-zinc-700 stroke-1" />
-            <h3 className="text-base font-semibold text-zinc-300">
-              {profile?.name ? `${profile.name}'s Profile` : 'Profile'}
-            </h3>
-            <p className="text-xs text-zinc-600 max-w-sm">
-              {profile?.twitter_handle ? `@${profile.twitter_handle}` : 'View your posts, replies, and account stats.'}
-            </p>
-          </div>
-        )}
-
-        {currentTab === 'bookmarks' && (
-          <div className="flex flex-col items-center justify-center min-h-[300px] text-center text-zinc-500 space-y-2">
-            <Bookmark className="size-10 text-zinc-700 stroke-1" />
-            <h3 className="text-base font-semibold text-zinc-300">Bookmarks</h3>
-            <p className="text-xs text-zinc-600 max-w-sm">
-              Saved posts and threads for easy reference later.
-            </p>
-          </div>
-        )}
-
-        {currentTab === 'follow' && (
-          <div className="flex flex-col items-center justify-center min-h-[300px] text-center text-zinc-500 space-y-2">
-            <UserPlus className="size-10 text-zinc-700 stroke-1" />
-            <h3 className="text-base font-semibold text-zinc-300">Follow Network</h3>
-            <p className="text-xs text-zinc-600 max-w-sm">
-              Manage your following and followers list across platforms.
-            </p>
-          </div>
-        )}
-
-        {currentTab === 'search' && (
-          <div className="flex flex-col items-center justify-center min-h-[300px] text-center text-zinc-500 space-y-2">
-            <Search className="size-10 text-zinc-700 stroke-1" />
-            <h3 className="text-base font-semibold text-zinc-300">Search</h3>
-            <p className="text-xs text-zinc-600 max-w-sm">
-              Search for users, keywords, or topics across networks.
-            </p>
-          </div>
-        )}
-      </div>
+      {currentTab === 'feed' ? (
+        <HumanFeed disabled={disabled} />
+      ) : currentTab === 'profile' ? (
+        <HumanProfile disabled={disabled} />
+      ) : currentTab === 'bookmarks' ? (
+        <HumanBookmarks />
+      ) : currentTab === 'follow' ? (
+        <HumanFollow disabled={disabled} />
+      ) : (
+        <HumanSearch disabled={disabled} />
+      )}
     </div>
   )
 }

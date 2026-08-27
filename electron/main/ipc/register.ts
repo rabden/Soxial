@@ -5,6 +5,7 @@ import { registerProfileHandlers } from './profile'
 import { registerScheduledPostHandlers } from './scheduled-posts'
 import { registerMediaHandlers } from './media'
 import { registerBackupHandlers } from './backup'
+import { registerHumanHandlers } from './human'
 
 export interface IpcRegistrationDependencies {
   getWindow: () => BrowserWindow | null
@@ -20,5 +21,6 @@ export function registerIpcHandlers(deps: IpcRegistrationDependencies): void {
   registerApiHandlers()
   registerMediaHandlers()
   registerBackupHandlers(deps.hasActiveRun)
+  registerHumanHandlers()
   deps.registerStatefulHandlers()
 }
