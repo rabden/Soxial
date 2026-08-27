@@ -277,6 +277,14 @@ export function persistSocialToolResult(
   }
 }
 
+/** SearchTimeline 404s now surface as the structured `not_found` code (or a
+ *  404 in the message from older CLI builds) — Twitter enforces
+ *  X-Client-Transaction-Id for search while HomeTimeline still answers. */
+function isSearchNotFound(result: CliResult): boolean {
+  if (result.errorCode === 'not_found') return true
+  return result.ok === false && /HTTP 404|\b404\b/.test(result.error ?? '')
+}
+
 export async function fetchTwitterUserPosts(handle: string): Promise<CliResult> {
   const since = getSinceDate()
   const searchResult = await runTwitterCli([
@@ -286,6 +294,11 @@ export async function fetchTwitterUserPosts(handle: string): Promise<CliResult> 
 
   let items = extractDataArray(searchResult)
   if (!searchResult.ok || items.length === 0) {
+    // Transparent fallback to the direct UserTweets endpoint (#44): a
+    // SearchTimeline 404 never surfaces to onboarding or the agent.
+    if (isSearchNotFound(searchResult)) {
+      logger.debug('social-content', 'twitter_user_posts fallback to UserTweets after SearchTimeline 404')
+    }
     const fallback = await runTwitterCli(['user-posts', handle, '--max', String(MAX_SOCIAL_ITEMS), '--json'], { compact: false })
     if (!fallback.ok) return fallback
     items = extractDataArray(fallback)
@@ -301,7 +314,15 @@ export async function fetchTwitterReplies(handle: string): Promise<CliResult> {
     'search', `from:${handle} filter:replies`, '--since', since,
     '-n', String(MAX_SOCIAL_ITEMS), '--json',
   ], { compact: false })
-  if (!result.ok) return result
+  if (!result.ok) {
+    // A search 404 must never surface as a user-visible failure (#45): the
+    // replies surface degrades to an empty list; other errors propagate.
+    if (isSearchNotFound(result)) {
+      logger.debug('social-content', `twitter_replies: SearchTimeline 404 for @${handle} — returning empty list`)
+      return { ok: true, data: [] }
+    }
+    return result
+  }
   const items = trimToLookback(extractDataArray(result), twitterItemTimestamp)
   return { ok: true, data: items }
 }

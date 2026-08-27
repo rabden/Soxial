@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
 import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, updateChatSessionContextSummary, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
-import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth } from './cli'
+import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
 import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
 import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
@@ -973,6 +973,8 @@ function setupIpc() {
     onboardingRuns.prepare(runId)
     OnboardingCheckpointStore.create(runId).update(() => {})
     logger.info('main', `onboarding:prepare ${runId}`)
+    // Re-apply the twitter-cli SearchTimeline patch before gathering (#45).
+    ensureTwitterCliPatched()
     return { runId }
   })
 
