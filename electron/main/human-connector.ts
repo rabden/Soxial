@@ -8,6 +8,9 @@ import { logger } from './log'
 export const HUMAN_PAGE_SIZE = 10
 /** Upper bound for any user-supplied `-n` count (D4). The CLI hard cap is 200. */
 export const HUMAN_MAX_COUNT = 100
+/** The connector's own hard cap (`rateLimit.maxCount`, config.py). Count-growth
+ *  surfaces (bookmarks, follow lists) grow toward it, then stop. */
+export const HUMAN_CLI_HARD_CAP = 200
 /** Every Human connector call runs under a hard timeout (runCli kills the child). */
 export const HUMAN_CLI_TIMEOUT_MS = 30_000
 /**

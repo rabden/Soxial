@@ -21,6 +21,7 @@ interface Window {
     humanVerifySession: () => Promise<import('../features/human/types').HumanSessionResult>
     humanProfile: () => Promise<import('../features/human/types').HumanResult<import('../features/human/types').HumanUser>>
     humanProfilePosts: (request: import('../features/human/types').HumanProfilePostsRequest) => Promise<import('../features/human/types').HumanResult<import('../features/human/types').Paginated<import('../features/human/types').HumanTweet>>>
+    humanBookmarks: (request: import('../features/human/types').HumanBookmarksRequest) => Promise<import('../features/human/types').HumanResult<import('../features/human/types').Paginated<import('../features/human/types').HumanTweet>>>
     prepareOnboarding: () => Promise<{ runId: string }>
     runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => Promise<any>
     resumeOnboarding: (runId: string) => Promise<any>
