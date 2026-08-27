@@ -102,20 +102,25 @@ export function usePaginatedList<T>({
         activeEpochRef.current = null
         if (res.ok) {
           const page = res.data
-          setItems((prev) => {
-            const base = mode === 'initial' ? [] : prev
-            return dedupeById([...base, ...page.items], optionsRef.current.getItemId)
-          })
+          const base = mode === 'initial' ? [] : itemsRef.current
+          const merged = dedupeById([...base, ...page.items], optionsRef.current.getItemId)
           const next = optionsRef.current.deriveNextCursor
             ? optionsRef.current.deriveNextCursor(page)
             : page.nextCursor
-          // A page claiming more but yielding no continuation token cannot
-          // advance — treat it as the end. Likewise a windowed cursor that
-          // did not move (a full page sharing one day) would refetch the
-          // identical window forever — stop instead of hammering the session.
+          // Three ways a "there is more" page can fail to advance, all of
+          // which must end the list instead of hammering the session:
+          //  - no continuation token at all;
+          //  - a windowed cursor that did not move (full page shares one day);
+          //  - a page that added zero new unique items (connector echoing
+          //    duplicates to fill the requested count).
           const windowStalled = mode === 'more' && next !== undefined && next === cursor
+          const noNewItems = mode === 'more' && merged.length === base.length
+          const canContinue = page.hasMore && Boolean(next) && !windowStalled && !noNewItems
+          itemsRef.current = merged
+          hasMoreRef.current = canContinue
           cursorRef.current = next
-          setHasMore(page.hasMore && Boolean(next) && !windowStalled)
+          setItems(merged)
+          setHasMore(canContinue)
         } else if (mode === 'initial') {
           setItems([])
           setHasMore(false)

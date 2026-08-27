@@ -204,6 +204,32 @@ describe('HumanFeed — renderer seam', () => {
     await screen.findByText('second-item')
   })
 
+  it('stops when a page adds zero new unique items (connector echo)', async () => {
+    // The connector keeps returning the SAME 10 items padded to the requested
+    // count (duplicate echo), with a fresh continuation token every time.
+    // Growth must stop on zero new unique items instead of climbing to the cap.
+    feedMock.mockImplementation(async (req: { cursor?: string }) => {
+      if (!req.cursor) return okPage(Array.from({ length: 10 }, (_, i) => makeTweet(String(i + 1))), '20')
+      if (req.cursor === '20') {
+        const echoed = [
+          ...Array.from({ length: 10 }, (_, i) => makeTweet(String(i + 1))),
+          ...Array.from({ length: 10 }, (_, i) => makeTweet(String(i + 1))),
+        ]
+        return okPage(echoed, '30')
+      }
+      return okPage([])
+    })
+
+    render(<HumanFeed />)
+    await screen.findByText('tweet-1')
+
+    markSentinelIntersecting()
+    // Page 2 delivered a token but zero new unique items → pagination ends
+    // without ever requesting page 3.
+    await screen.findByText(/all caught up/i)
+    expect(feedMock).toHaveBeenCalledTimes(2)
+  })
+
   it('locks the sub-toggle while disabled (rebuild lock)', async () => {
     feedMock.mockResolvedValue(okPage([]))
 
