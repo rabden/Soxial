@@ -1083,7 +1083,6 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
               <HumanPage
                 activeTab={humanTab}
                 onTabChange={setHumanTab}
-                profile={profile}
                 disabled={profileRebuilding}
               />
             </div>
