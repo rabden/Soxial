@@ -141,19 +141,30 @@ function VideoMedia({ src, type, poster, fill }: { src: string; type?: string; p
   )
 }
 
-export function PostAttachments({ attachments, className }: { attachments?: PostAttachment[]; className?: string }) {
+export function PostAttachments({
+  attachments,
+  className,
+  mediaClassName,
+}: {
+  attachments?: PostAttachment[]
+  className?: string
+  mediaClassName?: string
+}) {
   if (!attachments || attachments.length === 0) return null
 
-  const media = attachments.filter(a => a.type !== 'link' && !a.title)
-  const links = attachments.filter(a => a.type === 'link' || a.title)
+  const media = attachments.filter((a) => a.type !== 'link' && !a.title)
+  const links = attachments.filter((a) => a.type === 'link' || a.title)
 
   return (
     <div className={cn('flex flex-col gap-2', className)}>
       {media.length > 0 && (
-        <div className={cn(
-          'rounded-xl overflow-hidden border border-border',
-          media.length === 1 ? '' : 'grid grid-cols-2 gap-0.5'
-        )}>
+        <div
+          className={cn(
+            'rounded-xl overflow-hidden border border-border',
+            mediaClassName,
+            media.length === 1 ? '' : 'grid grid-cols-2 gap-0.5'
+          )}
+        >
           {media.map((att, i) => {
             const isVideo = att.type === 'video' || att.type === 'gif'
             const fill = media.length > 1

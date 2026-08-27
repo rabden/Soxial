@@ -1,9 +1,9 @@
 import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
-import { cn, openExternalUrl } from "@/lib/utils";
-import { playTactilePopSound } from "@/components/ui/tactile-sound";
-import { useMaterialRipple } from "@/components/ui/use-ripple";
+import { cn, openExternalUrl } from "src/lib/utils";
+import { playTactilePopSound } from "src/components/ui/tactile-sound";
+import { useMaterialRipple } from "src/components/ui/use-ripple";
 
 // --- 1. RIPPLE COMPONENT ---
 interface RippleProps {

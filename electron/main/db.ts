@@ -72,6 +72,7 @@ function initSchema(db: Database.Database) {
       openai_api_key TEXT,
       onboarding_complete INTEGER DEFAULT 0,
       branding_strategy TEXT,
+      app_mode TEXT DEFAULT 'agent' CHECK(app_mode IN ('agent', 'human')),
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -429,6 +430,11 @@ function initSchema(db: Database.Database) {
   if (profileKeys?.zai_api_key) syncPrimaryKeyToApiKeys(profileKeys.zai_api_key, 'zhipu')
   if (profileKeys?.gemini_api_key || profileKeys?.zai_api_key) {
     db.prepare('UPDATE user_profile SET gemini_api_key = NULL, zai_api_key = NULL WHERE id = 1').run()
+  }
+
+  // Migration: add app_mode column to user_profile table if missing
+  if (!profileCols.some((c: any) => c.name === 'app_mode')) {
+    db.exec("ALTER TABLE user_profile ADD COLUMN app_mode TEXT DEFAULT 'agent' CHECK(app_mode IN ('agent', 'human'))")
   }
 
   // Dedup: if any stale duplicate 'Primary' rows survived from the old insert-only
@@ -1035,6 +1041,28 @@ export function getSelectedModel(): string | null {
 
 export function setSelectedModel(model: string): void {
   getDb().prepare('UPDATE user_profile SET selected_model = ? WHERE id = 1').run(model)
+}
+
+export type AppMode = 'agent' | 'human'
+
+export function getAppMode(): AppMode {
+  const row = getDb().prepare('SELECT app_mode FROM user_profile WHERE id = 1').get() as { app_mode?: string } | undefined
+  const mode = row?.app_mode
+  if (mode === 'human' || mode === 'agent') return mode
+  return 'agent'
+}
+
+export function setAppMode(mode: AppMode): void {
+  if (mode !== 'agent' && mode !== 'human') {
+    throw new Error(`Invalid app_mode: ${mode}. Must be 'agent' or 'human'.`)
+  }
+  const db = getDb()
+  const existing = db.prepare('SELECT COUNT(*) as c FROM user_profile WHERE id = 1').get() as any
+  if (existing.c === 0) {
+    db.prepare("INSERT INTO user_profile (id, app_mode) VALUES (1, ?)").run(mode)
+  } else {
+    db.prepare('UPDATE user_profile SET app_mode = ? WHERE id = 1').run(mode)
+  }
 }
 
 // ─── API Key Management ───────────────────────────────────────────

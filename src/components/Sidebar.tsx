@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from 'react'
-import { Plus, CalendarClock, Settings, PanelLeftClose, Trash2, ArrowLeft, UserRound, Target, Cpu, Database } from 'lucide-react'
+import { Plus, CalendarClock, Settings, PanelLeftClose, Trash2, ArrowLeft, UserRound, Target, Cpu, Database, Bot, User } from 'lucide-react'
 import { motion, AnimatePresence } from 'motion/react'
 import { AppLogo } from 'src/components/ui/app-logo'
+import type { Mode, HumanTab } from 'src/features/human/types'
+import { HUMAN_NAV_ITEMS } from 'src/features/human/navigation'
 
 interface ChatSession {
   id: number
@@ -32,6 +34,10 @@ interface SidebarProps {
   disabled?: boolean
   settingsSection?: SettingsSection
   sessionStates?: Record<number, { status: "idle" | "running" | "completed-unread" | "question-unread" | "error-unread" }>
+  mode?: Mode
+  onModeChange?: (mode: Mode) => void
+  humanTab?: HumanTab
+  onHumanTabChange?: (tab: HumanTab) => void
   onNewChat: () => void
   onSelectSession: (id: number) => void
   onDeleteSession: (id: number) => void
@@ -76,6 +82,7 @@ function groupByDate(sessions: ChatSession[]) {
 
 export default function Sidebar({
   sessions, currentSessionId, currentView, streaming, profile, scheduledCount, disabled, settingsSection, sessionStates,
+  mode = 'agent', onModeChange, humanTab = 'feed', onHumanTabChange,
   onNewChat, onSelectSession, onDeleteSession, onNavigate, onToggleSidebar, onSelectSettings
 }: SidebarProps) {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; sessionId: number } | null>(null)
@@ -124,6 +131,48 @@ export default function Sidebar({
             >
               <PanelLeftClose className="size-3.5" />
             </button>
+          </div>
+
+          {/* Mode toggle (Agent | Human) placed right below header */}
+          <div className="px-3 pb-3">
+            <div className="flex rounded-xl bg-white/[0.04] p-1 border border-white/[0.06] relative">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onModeChange?.('agent')}
+                className={`relative flex-1 py-1.5 text-xs font-semibold text-center transition-colors rounded-lg flex items-center justify-center gap-1.5 z-10 ${
+                  mode === 'agent' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                {mode === 'agent' && (
+                  <motion.span
+                    layoutId="modeToggleBackdrop"
+                    className="absolute inset-0 rounded-lg bg-white/[0.1] shadow-sm"
+                    transition={springTransition}
+                  />
+                )}
+                <Bot className="size-3.5 relative z-10" />
+                <span className="relative z-10">Agent</span>
+              </button>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onModeChange?.('human')}
+                className={`relative flex-1 py-1.5 text-xs font-semibold text-center transition-colors rounded-lg flex items-center justify-center gap-1.5 z-10 ${
+                  mode === 'human' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                {mode === 'human' && (
+                  <motion.span
+                    layoutId="modeToggleBackdrop"
+                    className="absolute inset-0 rounded-lg bg-white/[0.1] shadow-sm"
+                    transition={springTransition}
+                  />
+                )}
+                <User className="size-3.5 relative z-10" />
+                <span className="relative z-10">Human</span>
+              </button>
+            </div>
           </div>
 
           {settingsMode ? (
@@ -196,88 +245,121 @@ export default function Sidebar({
                 </button>
               </div>
 
-              {/* Sessions List */}
-              <div className="flex-1 overflow-y-auto px-3 pb-2 scrollbar-none">
-                {groups.map(group => (
-                  <div key={group.label} className="mb-4">
-                    <div className="text-[10px] text-zinc-600 font-semibold uppercase tracking-[0.14em] px-3 pt-2 pb-1.5">{group.label}</div>
-                    <div className="space-y-0.5">
-                      {group.items.map(s => {
-                        const active = s.id === currentSessionId && currentView === 'chat'
-                        const state = sessionStates?.[s.id]
-                        const status = state?.status || 'idle'
+              {mode === 'human' ? (
+                /* Human navigation in sidebar body */
+                <div className="flex-1 overflow-y-auto px-3 pb-2 scrollbar-none space-y-0.5">
+                  <div className="text-[10px] text-zinc-600 font-semibold uppercase tracking-[0.14em] px-3 pt-2 pb-1.5">
+                    Explore
+                  </div>
+                  {HUMAN_NAV_ITEMS.map(item => {
+                    const active = humanTab === item.id
+                    const Icon = item.icon
+                    return (
+                      <button
+                        key={item.id}
+                        disabled={disabled}
+                        onClick={() => onHumanTabChange?.(item.id)}
+                        className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-colors ${
+                          active ? 'text-white' : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {active && (
+                          <motion.span
+                            layoutId="humanNavBackdrop"
+                            className="absolute inset-0 rounded-xl bg-white/[0.05]"
+                            transition={springTransition}
+                          />
+                        )}
+                        <Icon className={`size-4 relative z-10 transition-colors ${active ? 'text-[#1d9bf0]' : 'text-zinc-500'}`} />
+                        <span className="flex-1 text-left relative z-10">{item.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                /* Sessions List */
+                <div className="flex-1 overflow-y-auto px-3 pb-2 scrollbar-none">
+                  {groups.map(group => (
+                    <div key={group.label} className="mb-4">
+                      <div className="text-[10px] text-zinc-600 font-semibold uppercase tracking-[0.14em] px-3 pt-2 pb-1.5">{group.label}</div>
+                      <div className="space-y-0.5">
+                        {group.items.map(s => {
+                          const active = s.id === currentSessionId && currentView === 'chat'
+                          const state = sessionStates?.[s.id]
+                          const status = state?.status || 'idle'
 
-                        return (
-                          <div
-                            key={s.id}
-                            onContextMenu={(e) => handleContextMenu(e, s.id)}
-                            onClick={() => onSelectSession(s.id)}
-                            className={`relative flex items-center pl-3 pr-2 py-2 rounded-lg cursor-pointer text-[13px] font-medium transition-colors ${
-                              active
-                                ? 'bg-white/[0.05] text-white'
-                                : 'text-zinc-400 hover:bg-white/[0.03] hover:text-white'
-                            }`}
-                          >
-                            <span className="flex-1 truncate mr-2">{s.title}</span>
+                          return (
+                            <div
+                              key={s.id}
+                              onContextMenu={(e) => handleContextMenu(e, s.id)}
+                              onClick={() => onSelectSession(s.id)}
+                              className={`relative flex items-center pl-3 pr-2 py-2 rounded-lg cursor-pointer text-[13px] font-medium transition-colors ${
+                                active
+                                  ? 'bg-white/[0.05] text-white'
+                                  : 'text-zinc-400 hover:bg-white/[0.03] hover:text-white'
+                              }`}
+                            >
+                              <span className="flex-1 truncate mr-2">{s.title}</span>
 
-                            {/* Status indicators */}
-                            <div className="flex items-center shrink-0 min-w-4 h-4 justify-end">
-                              <AnimatePresence mode="popLayout">
-                                {status === 'running' && (
-                                  <motion.span
-                                    key="running"
-                                    initial={{ scale: 0.4, opacity: 0 }}
-                                    animate={{ scale: 1, opacity: 1 }}
-                                    exit={{ scale: 0.4, opacity: 0 }}
-                                    className="flex items-center"
-                                  >
-                                    <span className="relative flex h-2 w-2">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-60"></span>
-                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
-                                    </span>
-                                  </motion.span>
-                                )}
-                                {status === 'completed-unread' && (
-                                  <motion.span
-                                    key="completed"
-                                    initial={{ scale: 0.4, opacity: 0 }}
-                                    animate={{ scale: 1, opacity: 1 }}
-                                    exit={{ scale: 0.4, opacity: 0 }}
-                                    className="size-1.5 rounded-full bg-emerald-500"
-                                  />
-                                )}
-                                {status === 'question-unread' && (
-                                  <motion.span
-                                    key="question"
-                                    initial={{ scale: 0.4, opacity: 0 }}
-                                    animate={{ scale: 1, opacity: 1 }}
-                                    exit={{ scale: 0.4, opacity: 0 }}
-                                    className="size-1.5 rounded-full bg-amber-400"
-                                  />
-                                )}
-                                {status === 'error-unread' && (
-                                  <motion.span
-                                    key="error"
-                                    initial={{ scale: 0.4, opacity: 0 }}
-                                    animate={{ scale: 1, opacity: 1 }}
-                                    exit={{ scale: 0.4, opacity: 0 }}
-                                    className="size-1.5 rounded-full bg-red-400"
-                                  />
-                                )}
-                              </AnimatePresence>
+                              {/* Status indicators */}
+                              <div className="flex items-center shrink-0 min-w-4 h-4 justify-end">
+                                <AnimatePresence mode="popLayout">
+                                  {status === 'running' && (
+                                    <motion.span
+                                      key="running"
+                                      initial={{ scale: 0.4, opacity: 0 }}
+                                      animate={{ scale: 1, opacity: 1 }}
+                                      exit={{ scale: 0.4, opacity: 0 }}
+                                      className="flex items-center"
+                                    >
+                                      <span className="relative flex h-2 w-2">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-60"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                                      </span>
+                                    </motion.span>
+                                  )}
+                                  {status === 'completed-unread' && (
+                                    <motion.span
+                                      key="completed"
+                                      initial={{ scale: 0.4, opacity: 0 }}
+                                      animate={{ scale: 1, opacity: 1 }}
+                                      exit={{ scale: 0.4, opacity: 0 }}
+                                      className="size-1.5 rounded-full bg-emerald-500"
+                                    />
+                                  )}
+                                  {status === 'question-unread' && (
+                                    <motion.span
+                                      key="question"
+                                      initial={{ scale: 0.4, opacity: 0 }}
+                                      animate={{ scale: 1, opacity: 1 }}
+                                      exit={{ scale: 0.4, opacity: 0 }}
+                                      className="size-1.5 rounded-full bg-amber-400"
+                                    />
+                                  )}
+                                  {status === 'error-unread' && (
+                                    <motion.span
+                                      key="error"
+                                      initial={{ scale: 0.4, opacity: 0 }}
+                                      animate={{ scale: 1, opacity: 1 }}
+                                      exit={{ scale: 0.4, opacity: 0 }}
+                                      className="size-1.5 rounded-full bg-red-400"
+                                    />
+                                  )}
+                                </AnimatePresence>
+                              </div>
                             </div>
-                          </div>
-                        )
-                      })}
+                          )
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {sessions.length === 0 && (
-                  <div className="px-4 py-8 text-xs text-zinc-600 font-medium text-center">
-                    No conversations yet
-                  </div>
-                )}
-              </div>
+                  ))}
+                  {sessions.length === 0 && (
+                    <div className="px-4 py-8 text-xs text-zinc-600 font-medium text-center">
+                      No conversations yet
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
 

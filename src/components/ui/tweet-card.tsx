@@ -1,6 +1,17 @@
-import { useState, useEffect } from 'react'
-import { cn } from 'src/lib/utils'
-import { Send, Loader2, Clock } from 'lucide-react'
+import { useState, useEffect, type ReactNode } from 'react'
+import { cn, openExternalUrl } from 'src/lib/utils'
+import {
+  Send,
+  Loader2,
+  Clock,
+  Repeat2,
+  MessageCircle,
+  Heart,
+  BarChart2,
+  Bookmark,
+  Share2,
+  Ellipsis,
+} from 'lucide-react'
 import { PostAttachments, PostAttachment, extractTweetAttachments, expandTweetLinks } from 'src/components/ui/post-attachment'
 import { getCachedPost, cachePost } from 'src/lib/post-cache'
 
@@ -12,7 +23,7 @@ function stripMediaLinks(text: string, media: any[]): string {
   return text.replace(/(\s*https:\/\/t\.co\/\S+)+\s*$/, '').trim()
 }
 
-function parseTweetData(raw: any): TweetCardProps {
+export function parseTweetData(raw: any): TweetCardProps {
   const author = typeof raw.author === 'object' && raw.author ? raw.author : null
   const authorStr = typeof raw.author === 'string' ? raw.author.replace(/^@/, '') : null
   const handle = author?.screenName || author?.username || authorStr || raw.screenName || raw.userName || raw.username
@@ -28,10 +39,47 @@ function parseTweetData(raw: any): TweetCardProps {
     retweets: metrics.retweets ?? raw.rts ?? raw.retweets ?? 0,
     replies: metrics.replies ?? raw.replies ?? 0,
     bookmarks: metrics.bookmarks ?? raw.bookmarks ?? 0,
+    views: metrics.views ?? raw.views ?? 0,
+    quotes: metrics.quotes ?? raw.quotes ?? 0,
+    isRetweet: Boolean(raw.isRetweet ?? raw.is_retweet),
+    retweetedBy: raw.retweetedBy ?? raw.retweeted_by,
+    quotedTweet: raw.quotedTweet ?? raw.quoted_tweet,
     timestamp: raw.createdAtLocal || raw.createdAtISO || raw.createdAt || raw.time,
     verified: author?.verified ?? raw.verified,
     attachments: extractTweetAttachments(raw),
   }
+}
+
+export function timeAgo(timestampStr?: string): string {
+  if (!timestampStr) return ''
+  const parsedTime = Date.parse(timestampStr)
+  if (isNaN(parsedTime)) {
+    // If it's already a relative time like "2h" or custom string, return as is
+    return timestampStr
+  }
+
+  const now = Date.now()
+  const diffSec = Math.floor((now - parsedTime) / 1000)
+
+  if (diffSec < 0) return timestampStr
+  if (diffSec < 60) return `${Math.max(1, diffSec)}s`
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return `${diffMin}m`
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `${diffHr}h`
+  const diffDay = Math.floor(diffHr / 24)
+  if (diffDay < 7) return `${diffDay}d`
+
+  const date = new Date(parsedTime)
+  const nowDate = new Date(now)
+  const isSameYear = date.getFullYear() === nowDate.getFullYear()
+  const monthStr = date.toLocaleDateString('en-US', { month: 'short' })
+  const day = date.getDate()
+
+  if (isSameYear) {
+    return `${monthStr} ${day}`
+  }
+  return `${monthStr} ${day}, ${date.getFullYear()}`
 }
 
 function pickTweetData(list: any[] | null | undefined, targetId?: string): any | null {
@@ -60,6 +108,15 @@ export interface TweetCardProps {
   retweets?: number
   replies?: number
   bookmarks?: number
+  views?: number
+  quotes?: number
+  isRetweet?: boolean
+  retweetedBy?: string
+  quotedTweet?: { id: string; text: string; author?: { screenName: string; name: string } }
+  onLike?: () => void
+  onRetweet?: () => void
+  onBookmark?: () => void
+  onShare?: () => void
   timestamp?: string
   verified?: boolean
   replyTo?: { authorName: string; authorHandle: string }
@@ -70,6 +127,7 @@ export interface TweetCardProps {
   preview?: boolean
   attachments?: PostAttachment[]
   showPostButton?: boolean
+  variant?: 'card' | 'feed'
 }
 
 function VerifiedBadge({ className }: { className?: string }) {
@@ -84,6 +142,72 @@ function fmt(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M'
   if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
   return String(n)
+}
+
+function formatRichContent(text: string): ReactNode {
+  if (!text) return text
+
+  // Regex to match URLs, #hashtags, and @mentions
+  const tokenRegex = /(https?:\/\/[^\s]+|#[\w\u0590-\u05ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+|@\w+)/g
+  const parts: ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = tokenRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index))
+    }
+    const token = match[0]
+    if (token.startsWith('http://') || token.startsWith('https://')) {
+      parts.push(
+        <a
+          key={match.index}
+          href={token}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-[#1D9BF0] hover:underline"
+        >
+          {token}
+        </a>
+      )
+    } else if (token.startsWith('@')) {
+      const handle = token.slice(1)
+      parts.push(
+        <a
+          key={match.index}
+          href={`https://x.com/${handle}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-[#1D9BF0] hover:underline"
+        >
+          {token}
+        </a>
+      )
+    } else if (token.startsWith('#')) {
+      const tag = token.slice(1)
+      parts.push(
+        <a
+          key={match.index}
+          href={`https://x.com/hashtag/${tag}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="text-[#1D9BF0] hover:underline"
+        >
+          {token}
+        </a>
+      )
+    }
+    lastIndex = tokenRegex.lastIndex
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+
+  return parts
 }
 
 function TweetReplyNode({ reply, depth = 0 }: { reply: TweetCardProps; depth: number }) {
@@ -134,8 +258,9 @@ function TweetReplyNode({ reply, depth = 0 }: { reply: TweetCardProps; depth: nu
 
 export function TweetCard({
   id, tweetId, replyId, authorName, authorHandle, authorImage, content, likes = 0, retweets = 0,
-  replies = 0, bookmarks = 0, timestamp, verified, replyTo, onPost, posting, className, repliesList, preview,
-  attachments, showPostButton
+  replies = 0, bookmarks = 0, views = 0, quotes = 0, isRetweet, retweetedBy, quotedTweet,
+  onLike, onRetweet, onBookmark, onShare, timestamp, verified, replyTo, onPost, posting, className,
+  repliesList, preview, attachments, showPostButton, variant = 'card'
 }: TweetCardProps) {
   const [loadedData, setLoadedData] = useState<TweetCardProps | null>(null)
   const [loading, setLoading] = useState(false)
@@ -239,14 +364,237 @@ export function TweetCard({
 
   const displayData = loadedData || {
     authorName, authorHandle, authorImage, content, likes, retweets,
-    replies, bookmarks, timestamp, verified, replyTo, onPost, posting, repliesList, attachments, showPostButton
+    replies, bookmarks, views, quotes, isRetweet, retweetedBy, quotedTweet,
+    onLike, onRetweet, onBookmark, onShare,
+    timestamp, verified, replyTo, onPost, posting, repliesList, attachments, showPostButton, variant
   }
 
   const resolvedReplies = loadedReply
     ? [loadedReply, ...(displayData.repliesList || [])]
     : displayData.repliesList
 
-  const tweetUrl = `https://x.com/${displayData.authorHandle}/status`
+  const tweetIdForLink = activeId || displayData.id
+  const tweetUrl = displayData.authorHandle && tweetIdForLink
+    ? `https://x.com/${displayData.authorHandle}/status/${tweetIdForLink}`
+    : displayData.authorHandle
+      ? `https://x.com/${displayData.authorHandle}`
+      : 'https://x.com'
+
+  const isFeed = (variant || displayData.variant) === 'feed'
+
+  if (isFeed) {
+    const isRetweet = displayData.isRetweet || Boolean(displayData.retweetedBy)
+
+    return (
+      <div
+        onClick={() => {
+          if (!preview && tweetUrl) {
+            openExternalUrl(tweetUrl)
+          }
+        }}
+        className={cn(
+          'w-full border-b border-border/60 hover:bg-white/[0.02] transition-colors px-4 py-3 cursor-pointer',
+          className
+        )}
+      >
+        {/* Retweet header attribution */}
+        {isRetweet && (
+          <div className="flex items-center gap-2 mb-1.5 ml-8 text-xs font-semibold text-muted-foreground">
+            <Repeat2 className="size-3.5" />
+            <span>{displayData.retweetedBy ? `${displayData.retweetedBy} reposted` : 'Reposted'}</span>
+          </div>
+        )}
+
+        {/* Reply to context */}
+        {displayData.replyTo && (
+          <div className="text-xs text-muted-foreground mb-1 ml-12">
+            Replying to <span className="text-[#1D9BF0]">@{displayData.replyTo.authorHandle}</span>
+          </div>
+        )}
+
+        <div className="flex items-start gap-3">
+          {/* Avatar */}
+          <div className="size-10 rounded-full overflow-hidden bg-muted flex-shrink-0">
+            {displayData.authorImage ? (
+              <img src={displayData.authorImage} alt={displayData.authorName} className="size-full object-cover" />
+            ) : (
+              <div className="size-full flex items-center justify-center text-sm font-medium text-muted-foreground">
+                {displayData.authorName?.[0]}
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            {/* Inline Header */}
+            <div className="flex items-center justify-between gap-1 leading-5">
+              <div className="flex items-center gap-1 min-w-0 overflow-hidden text-[15px] truncate">
+                <span className="font-bold text-foreground hover:underline truncate">
+                  {displayData.authorName}
+                </span>
+                {displayData.verified && <VerifiedBadge className="text-[#1D9BF0] shrink-0" />}
+                <span className="text-muted-foreground text-sm truncate">
+                  @{displayData.authorHandle}
+                </span>
+                {displayData.timestamp && (
+                  <>
+                    <span className="text-muted-foreground text-sm">·</span>
+                    <span className="text-muted-foreground text-sm shrink-0">
+                      {timeAgo(displayData.timestamp)}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                }}
+                className="text-muted-foreground hover:text-foreground p-1 -mr-1 rounded-full hover:bg-white/10 transition-colors"
+                aria-label="More options"
+              >
+                <Ellipsis className="size-4" />
+              </button>
+            </div>
+
+            {/* Content with rich highlights */}
+            {displayData.content && (
+              <p className="mt-1 text-[15px] leading-snug text-foreground whitespace-pre-wrap">
+                {formatRichContent(displayData.content)}
+              </p>
+            )}
+
+            {/* Attachments */}
+            {displayData.attachments && displayData.attachments.length > 0 && (
+              <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                <PostAttachments attachments={displayData.attachments} mediaClassName="rounded-2xl" />
+              </div>
+            )}
+
+            {/* Quoted Tweet */}
+            {displayData.quotedTweet && (
+              <div
+                className="mt-2.5 rounded-2xl border border-border/80 p-3 bg-muted/20 hover:bg-muted/30 transition-colors cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (!preview && displayData.quotedTweet?.author?.screenName && displayData.quotedTweet.id) {
+                    openExternalUrl(`https://x.com/${displayData.quotedTweet.author.screenName}/status/${displayData.quotedTweet.id}`)
+                  }
+                }}
+              >
+                {displayData.quotedTweet.author && (
+                  <div className="flex items-center gap-1 text-[13px] mb-1">
+                    <span className="font-semibold text-foreground">
+                      {displayData.quotedTweet.author.name || displayData.quotedTweet.author.screenName}
+                    </span>
+                    <span className="text-muted-foreground">
+                      @{displayData.quotedTweet.author.screenName}
+                    </span>
+                  </div>
+                )}
+                <p className="text-[13.5px] leading-snug text-foreground whitespace-pre-wrap">
+                  {formatRichContent(displayData.quotedTweet.text)}
+                </p>
+              </div>
+            )}
+
+            {/* Action Bar (6 groups) */}
+            <div
+              className="mt-3 flex items-center justify-between max-w-[450px] text-muted-foreground text-[13px]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* 1. Reply */}
+              <button
+                type="button"
+                className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors -ml-1.5"
+                aria-label="Reply"
+              >
+                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                  <MessageCircle className="size-4" />
+                </div>
+                {displayData.replies !== undefined && displayData.replies > 0 && (
+                  <span className="text-xs">{fmt(displayData.replies)}</span>
+                )}
+              </button>
+
+              {/* 2. Repost */}
+              <button
+                type="button"
+                onClick={displayData.onRetweet}
+                className="group flex items-center gap-1.5 hover:text-[#00BA7C] transition-colors"
+                aria-label="Repost"
+              >
+                <div className="p-1.5 rounded-full group-hover:bg-[#00BA7C]/10 transition-colors">
+                  <Repeat2 className="size-4" />
+                </div>
+                {displayData.retweets !== undefined && displayData.retweets > 0 && (
+                  <span className="text-xs">{fmt(displayData.retweets)}</span>
+                )}
+              </button>
+
+              {/* 3. Like */}
+              <button
+                type="button"
+                onClick={displayData.onLike}
+                className="group flex items-center gap-1.5 hover:text-[#F91880] transition-colors"
+                aria-label="Like"
+              >
+                <div className="p-1.5 rounded-full group-hover:bg-[#F91880]/10 transition-colors">
+                  <Heart className="size-4" />
+                </div>
+                {displayData.likes !== undefined && displayData.likes > 0 && (
+                  <span className="text-xs">{fmt(displayData.likes)}</span>
+                )}
+              </button>
+
+              {/* 4. Views */}
+              <div className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors">
+                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                  <BarChart2 className="size-4" />
+                </div>
+                {displayData.views !== undefined && displayData.views > 0 && (
+                  <span className="text-xs">{fmt(displayData.views)}</span>
+                )}
+              </div>
+
+              {/* 5. Bookmark */}
+              <button
+                type="button"
+                onClick={displayData.onBookmark}
+                className="group flex items-center hover:text-[#1D9BF0] transition-colors"
+                aria-label="Bookmark"
+              >
+                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                  <Bookmark className="size-4" />
+                </div>
+              </button>
+
+              {/* 6. Share */}
+              <button
+                type="button"
+                onClick={displayData.onShare}
+                className="group flex items-center hover:text-[#1D9BF0] transition-colors"
+                aria-label="Share"
+              >
+                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                  <Share2 className="size-4" />
+                </div>
+              </button>
+            </div>
+
+            {/* Replies List for feed variant */}
+            {resolvedReplies && resolvedReplies.length > 0 && (
+              <div className="mt-3 border-t border-border/40 pt-2 space-y-1">
+                {resolvedReplies.map((reply, i) => (
+                  <TweetReplyNode key={reply.id || i} reply={reply} depth={1} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className={cn(
@@ -295,6 +643,8 @@ export function TweetCard({
         {displayData.retweets !== undefined && displayData.retweets > 0 && <span><strong className="text-foreground">{fmt(displayData.retweets)}</strong> Reposts</span>}
         {displayData.likes !== undefined && displayData.likes > 0 && <span><strong className="text-foreground">{fmt(displayData.likes)}</strong> Likes</span>}
         {displayData.bookmarks !== undefined && displayData.bookmarks > 0 && <span><strong className="text-foreground">{fmt(displayData.bookmarks)}</strong> Bookmarks</span>}
+        {displayData.views !== undefined && displayData.views > 0 && <span><strong className="text-foreground">{fmt(displayData.views)}</strong> Views</span>}
+        {displayData.quotes !== undefined && displayData.quotes > 0 && <span><strong className="text-foreground">{fmt(displayData.quotes)}</strong> Quotes</span>}
         {showPostButton && onPost && (
           <button onClick={onPost} disabled={posting} className="ml-auto flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-colors disabled:opacity-50">
             {posting ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}

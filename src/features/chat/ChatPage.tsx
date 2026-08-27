@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import { Message, MessageContent } from "src/components/ai-elements/message";
 import {
   Conversation,
@@ -16,6 +16,8 @@ import { AppLogo } from "src/components/ui/app-logo";
 import Sidebar, { View, SettingsSection } from "src/components/Sidebar";
 import ScheduledPosts from "src/components/ScheduledPosts";
 import ProfileView from "src/components/Profile";
+const HumanPage = lazy(() => import("src/features/human"));
+import type { Mode, HumanTab } from "src/features/human/types";
 import { fileToAttachment, type ChatAttachment } from "src/features/chat/attachments";
 import { buildApiMessages, parseSteps } from "src/features/chat/messages";
 import { MessageSegments } from "src/features/chat/message-segments";
@@ -87,6 +89,29 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     window.api.setSelectedModel(model).catch(() => {});
   }, []);
   const [selectedEffort, setSelectedEffort] = useState("Medium");
+  const [mode, setModeState] = useState<Mode>("agent");
+  const modeRef = useRef<Mode>("agent");
+  const [humanTab, setHumanTab] = useState<HumanTab>("feed");
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
+    window.api.getAppMode().then((m) => {
+      if (m) {
+        setModeState(m);
+        modeRef.current = m;
+      }
+    }).catch(() => {});
+  }, []);
+
+  const handleModeChange = useCallback((newMode: Mode) => {
+    setModeState(newMode);
+    modeRef.current = newMode;
+    window.api.setAppMode(newMode).catch(() => {});
+  }, []);
+
   const currentSessionIdRef = useRef<number | null>(null);
   const [inputEl, setInputEl] = useState<HTMLDivElement | null>(null);
   const [inputAreaHeight, setInputAreaHeight] = useState(0);
@@ -1007,6 +1032,10 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
           disabled={profileRebuilding}
           settingsSection={settingsSection}
           sessionStates={sessionStates}
+          mode={mode}
+          onModeChange={handleModeChange}
+          humanTab={humanTab}
+          onHumanTabChange={setHumanTab}
           onNewChat={() => { if (!profileRebuilding) newChat(); }}
           onSelectSession={(id) => { if (!profileRebuilding) selectSession(id); }}
           onDeleteSession={(id) => { if (!profileRebuilding) deleteSession(id); }}
@@ -1048,6 +1077,17 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
               setView("chat");
             }}
           />
+        ) : mode === "human" ? (
+          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-sm text-zinc-500">Loading Human View...</div>}>
+            <div data-mode="human" className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-black">
+              <HumanPage
+                activeTab={humanTab}
+                onTabChange={setHumanTab}
+                profile={profile}
+                disabled={profileRebuilding}
+              />
+            </div>
+          </Suspense>
         ) : (
           <>
             {onMainScreen ? (
