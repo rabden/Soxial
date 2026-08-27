@@ -42,6 +42,20 @@ const api = {
     ipcRenderer.invoke('human:followList', request),
   humanFollowAction: (request: { handle: string; action: 'follow' | 'unfollow' }) =>
     ipcRenderer.invoke('human:followAction', request),
+  humanSearch: (request: {
+    query: string
+    product?: 'Top' | 'Latest' | 'Photos' | 'Videos'
+    count?: number
+    until?: string
+    from?: string
+    to?: string
+    lang?: string
+    since?: string
+    has?: Array<'links' | 'images' | 'videos' | 'media'>
+    exclude?: Array<'retweets' | 'replies' | 'links'>
+    minLikes?: number
+    minRetweets?: number
+  }) => ipcRenderer.invoke('human:search', request),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),
   runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages, runId),

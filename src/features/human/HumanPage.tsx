@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { motion } from 'motion/react'
-import { Search } from 'lucide-react'
 import type { HumanTab } from './types'
 import { HUMAN_NAV_ITEMS } from './navigation'
 import HumanFeed from './components/HumanFeed'
 import HumanProfile from './components/HumanProfile'
 import HumanBookmarks from './components/HumanBookmarks'
 import HumanFollow from './components/HumanFollow'
+import HumanSearch from './components/HumanSearch'
 
 const springTransition = {
   type: 'spring' as const,
@@ -85,17 +85,7 @@ export default function HumanPage({
       ) : currentTab === 'follow' ? (
         <HumanFollow disabled={disabled} />
       ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto p-6 scrollbar-none max-w-4xl mx-auto w-full">
-          {currentTab === 'search' && (
-            <div className="flex flex-col items-center justify-center min-h-[300px] text-center text-zinc-500 space-y-2">
-              <Search className="size-10 text-zinc-700 stroke-1" />
-              <h3 className="text-base font-semibold text-zinc-300">Search</h3>
-              <p className="text-xs text-zinc-600 max-w-sm">
-                Search for users, keywords, or topics across networks.
-              </p>
-            </div>
-          )}
-        </div>
+        <HumanSearch disabled={disabled} />
       )}
     </div>
   )
