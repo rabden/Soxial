@@ -42,10 +42,14 @@ export function saveCredential(id: string, value: string): void {
 }
 
 export function getCredential(id: string): string | null {
-  const encoded = readVault().credentials[id]
-  if (!encoded) return null
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('OS secure credential storage is unavailable.')
-  return safeStorage.decryptString(Buffer.from(encoded, 'base64'))
+  try {
+    const encoded = readVault().credentials[id]
+    if (!encoded) return null
+    if (!safeStorage.isEncryptionAvailable()) return null
+    return safeStorage.decryptString(Buffer.from(encoded, 'base64'))
+  } catch (err) {
+    return null
+  }
 }
 
 export function deleteCredential(id: string): void {
