@@ -163,3 +163,60 @@ export function toHumanPage<T>(res: CliResult): HumanPage<T> {
   logger.debug('human-connector', `page: ${items.length} items, cursor=${nextCursor ? 'yes' : 'no'}`)
   return { items, ...(nextCursor ? { nextCursor } : {}), hasMore: Boolean(nextCursor) }
 }
+
+/**
+ * Windowed page for cursor-less commands (profile posts/replies, search):
+ * hasMore is a page-full heuristic; the renderer advances the date window.
+ */
+export function toWindowedHumanPage<T>(res: CliResult, requestedCount: number): HumanPage<T> {
+  const items = extractHumanItems(res) as T[]
+  return { items, hasMore: items.length >= requestedCount }
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** `--until`/`--since` accept YYYY-MM-DD only (composed into X search operators). */
+export function sanitizeIsoDate(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) return undefined
+  const date = new Date(`${value}T00:00:00Z`)
+  return Number.isNaN(date.getTime()) ? undefined : value
+}
+
+/** Normalize a connector user dict (`whoami`/`user`) — keeps connector count
+ *  keys (followers/following/tweets), aliases `username` → `screenName`. */
+export function normalizeHumanUser(raw: any): {
+  id?: string
+  screenName: string
+  name: string
+  bio?: string
+  location?: string
+  url?: string
+  followers?: number
+  following?: number
+  tweets?: number
+  likes?: number
+  verified?: boolean
+  profileImageUrl?: string
+  createdAt?: string
+  createdAtISO?: string
+} | null {
+  if (!raw || typeof raw !== 'object') return null
+  const screenName = raw.screenName ?? raw.username
+  if (typeof screenName !== 'string' || !screenName) return null
+  return {
+    ...(typeof raw.id === 'string' || typeof raw.id === 'number' ? { id: String(raw.id) } : {}),
+    screenName,
+    name: typeof raw.name === 'string' ? raw.name : screenName,
+    ...(typeof raw.bio === 'string' ? { bio: raw.bio } : {}),
+    ...(typeof raw.location === 'string' ? { location: raw.location } : {}),
+    ...(typeof raw.url === 'string' ? { url: raw.url } : {}),
+    ...(typeof raw.followers === 'number' ? { followers: raw.followers } : {}),
+    ...(typeof raw.following === 'number' ? { following: raw.following } : {}),
+    ...(typeof raw.tweets === 'number' ? { tweets: raw.tweets } : {}),
+    ...(typeof raw.likes === 'number' ? { likes: raw.likes } : {}),
+    ...(raw.verified === true ? { verified: true } : {}),
+    ...(typeof raw.profileImageUrl === 'string' ? { profileImageUrl: raw.profileImageUrl } : {}),
+    ...(typeof raw.createdAt === 'string' ? { createdAt: raw.createdAt } : {}),
+    ...(typeof raw.createdAtISO === 'string' ? { createdAtISO: raw.createdAtISO } : {}),
+  }
+}

@@ -9,6 +9,12 @@ export interface UsePaginatedListOptions<T> {
   fetchPage: (cursor: string | undefined) => Promise<HumanResult<Paginated<T>>>
   /** Stable identity for de-duplicating items across pages. */
   getItemId: (item: T) => string
+  /**
+   * Surfaces without a native cursor (profile posts, search) advance a date
+   * window: derive the next window from the page instead of reading
+   * `nextCursor`. Default: `page.nextCursor`.
+   */
+  deriveNextCursor?: (page: Paginated<T>) => string | undefined
 }
 
 export interface PaginatedListState<T> {
@@ -50,6 +56,7 @@ export function usePaginatedList<T>({
   resetKey,
   fetchPage,
   getItemId,
+  deriveNextCursor,
 }: UsePaginatedListOptions<T>): PaginatedListState<T> {
   const [items, setItems] = useState<T[]>([])
   const [loading, setLoading] = useState(true)
@@ -64,8 +71,8 @@ export function usePaginatedList<T>({
   const itemsRef = useRef<T[]>([])
   const hasMoreRef = useRef(false)
 
-  const optionsRef = useRef({ fetchPage, getItemId })
-  optionsRef.current = { fetchPage, getItemId }
+  const optionsRef = useRef({ fetchPage, getItemId, deriveNextCursor })
+  optionsRef.current = { fetchPage, getItemId, deriveNextCursor }
 
   const syncRefs = () => {
     hasMoreRef.current = hasMore
@@ -99,8 +106,13 @@ export function usePaginatedList<T>({
             const base = mode === 'initial' ? [] : prev
             return dedupeById([...base, ...page.items], optionsRef.current.getItemId)
           })
-          cursorRef.current = page.nextCursor
-          setHasMore(page.hasMore)
+          const next = optionsRef.current.deriveNextCursor
+            ? optionsRef.current.deriveNextCursor(page)
+            : page.nextCursor
+          // A page claiming more but yielding no continuation token cannot
+          // advance — treat it as the end.
+          cursorRef.current = next
+          setHasMore(page.hasMore && Boolean(next))
         } else if (mode === 'initial') {
           setItems([])
           setHasMore(false)

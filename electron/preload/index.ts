@@ -34,6 +34,9 @@ const api = {
   humanFeed: (request: { type?: 'for-you' | 'following'; count?: number; cursor?: string }) =>
     ipcRenderer.invoke('human:feed', request),
   humanVerifySession: () => ipcRenderer.invoke('human:verifySession'),
+  humanProfile: () => ipcRenderer.invoke('human:profile'),
+  humanProfilePosts: (request: { subTab: 'posts' | 'replies'; count?: number; until?: string }) =>
+    ipcRenderer.invoke('human:profilePosts', request),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),
   runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages, runId),
