@@ -8,12 +8,8 @@ import { usePaginatedList } from "../hooks/usePaginatedList";
 import { AuthGate } from "./AuthGate";
 import { EmptyState } from "./EmptyState";
 import { ProfileHeader } from "./ProfileHeader";
-import type {
-  HumanProfileSubTab,
-  HumanTweet,
-  HumanUser,
-  Paginated,
-} from "../types";
+import { oldestTweetDate } from "../utils";
+import type { HumanProfileSubTab, HumanTweet, HumanUser } from "../types";
 
 const springTransition = {
   type: "spring" as const,
@@ -25,18 +21,6 @@ const SUB_TABS: Array<{ id: HumanProfileSubTab; label: string }> = [
   { id: "posts", label: "Posts" },
   { id: "replies", label: "Replies" },
 ];
-
-/** Windowed pagination: the next page asks for items older than the oldest seen. */
-function deriveOldestDate(page: Paginated<HumanTweet>): string | undefined {
-  const oldest = page.items[page.items.length - 1];
-  const iso =
-    oldest?.createdAtISO ?? oldest?.createdAtLocal ?? oldest?.createdAt;
-  if (!iso) return undefined;
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime())
-    ? undefined
-    : date.toISOString().slice(0, 10);
-}
 
 /** Authenticated user's profile: flat header + Posts/Replies nested tabs. */
 export default function HumanProfile({
@@ -80,7 +64,7 @@ export default function HumanProfile({
     fetchPage: (until) =>
       window.api.humanProfilePosts({ subTab, count: 10, until }),
     getItemId: (tweet) => tweet.id,
-    deriveNextCursor: deriveOldestDate,
+    deriveNextCursor: oldestTweetDate,
   });
 
   const recheck = useCallback(async () => {

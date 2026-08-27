@@ -34,6 +34,102 @@ export interface HumanFollowListRequest {
   count?: number
 }
 
+export interface HumanSearchRequest {
+  query: string
+  product?: 'Top' | 'Latest' | 'Photos' | 'Videos'
+  count?: number
+  /** Date-window cursor (YYYY-MM-DD) — deeper pages search older than this. */
+  until?: string
+  from?: string
+  to?: string
+  lang?: string
+  since?: string
+  has?: Array<'links' | 'images' | 'videos' | 'media'>
+  exclude?: Array<'retweets' | 'replies' | 'links'>
+  minLikes?: number
+  minRetweets?: number
+}
+
+const SEARCH_PRODUCTS = new Set(['Top', 'Latest', 'Photos', 'Videos'])
+const SEARCH_HAS = new Set(['links', 'images', 'videos', 'media'])
+const SEARCH_EXCLUDE = new Set(['retweets', 'replies', 'links'])
+const LANG_RE = /^[a-z]{2}$/i
+
+function invalid(message: string) {
+  return { ok: false as const, error: mapCliError({ error: message, errorCode: 'invalid_input' }) }
+}
+
+function searchHandle(value: unknown, flag: string): string | undefined | { error: string } {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value !== 'string') return { error: `${flag} must be a handle` }
+  try {
+    return normalizeTwitterHandle(value)
+  } catch {
+    return { error: `${flag}: invalid X handle "${value}"` }
+  }
+}
+
+
+/** Build validated `search` args; every filter the renderer surfaces passes through. */
+function buildSearchArgs(request: HumanSearchRequest): { ok: true; args: string[] } | { ok: false; error: ReturnType<typeof mapCliError> } {
+  const query = typeof request.query === 'string' ? request.query.trim() : ''
+  if (!query) return { ok: false, error: invalid('Enter a search query.').error }
+  if (query.length > 500) return { ok: false, error: invalid('Search query is too long (max 500 characters).').error }
+  if (query.startsWith('-')) {
+    return { ok: false, error: invalid('Query cannot start with "-" (the connector parses it as a flag).').error }
+  }
+
+  const product = request.product && SEARCH_PRODUCTS.has(request.product) ? request.product : 'Top'
+  const args = ['search', query, '--json', '-t', product, '-n', String(clampHumanCount(request.count))]
+
+  for (const [flag, value] of [['--from', request.from], ['--to', request.to]] as const) {
+    const handle = searchHandle(value, flag)
+    if (typeof handle === 'object' && handle !== null) return { ok: false, error: invalid(handle.error).error }
+    if (handle) args.push(flag, handle)
+  }
+
+  if (request.lang !== undefined && request.lang !== '') {
+    if (typeof request.lang !== 'string' || !LANG_RE.test(request.lang)) {
+      return { ok: false, error: invalid('Language must be a 2-letter ISO code (e.g. en).').error }
+    }
+    args.push('--lang', request.lang.toLowerCase())
+  }
+
+  for (const [flag, value] of [['--since', request.since], ['--until', request.until]] as const) {
+    const date = sanitizeIsoDate(value)
+    if (value !== undefined && value !== '' && !date) {
+      return { ok: false, error: invalid(`${flag} must be a YYYY-MM-DD date.`).error }
+    }
+    if (date) args.push(flag, date)
+  }
+
+  if (request.has !== undefined) {
+    if (!Array.isArray(request.has)) return { ok: false, error: invalid('has must be a list.').error }
+    for (const item of request.has) {
+      if (!SEARCH_HAS.has(String(item))) return { ok: false, error: invalid(`Unsupported --has value: ${String(item)}`).error }
+      args.push('--has', String(item))
+    }
+  }
+
+  if (request.exclude !== undefined) {
+    if (!Array.isArray(request.exclude)) return { ok: false, error: invalid('exclude must be a list.').error }
+    for (const item of request.exclude) {
+      if (!SEARCH_EXCLUDE.has(String(item))) return { ok: false, error: invalid(`Unsupported --exclude value: ${String(item)}`).error }
+      args.push('--exclude', String(item))
+    }
+  }
+
+  for (const [flag, value] of [['--min-likes', request.minLikes], ['--min-retweets', request.minRetweets]] as const) {
+    if (value === undefined || value === null) continue
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 10_000_000) {
+      return { ok: false, error: invalid(`${flag} must be a whole number between 0 and 10,000,000.`).error }
+    }
+    args.push(flag, String(value))
+  }
+
+  return { ok: true, args }
+}
+
 function authError(session: Extract<HumanSessionResult, { ok: false }>) {
   return { ok: false as const, error: session.error }
 }
@@ -197,4 +293,20 @@ export function registerHumanHandlers(): void {
       return { ok: true as const, data: { handle, following: action === 'follow' } }
     },
   )
+
+  ipcMain.handle('human:search', async (_event, request: HumanSearchRequest) => {
+    const session = await verifyHumanSession()
+    if (!session.ok) return authError(session)
+
+    const built = buildSearchArgs(request ?? ({} as HumanSearchRequest))
+    if (!built.ok) return { ok: false as const, error: built.error }
+
+    const res = await runHumanTwitterCli(built.args)
+    if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+    // No cursor for search — date-window pagination with a page-full heuristic.
+    return {
+      ok: true as const,
+      data: toWindowedHumanPage(res, clampHumanCount(request.count)),
+    }
+  })
 }
