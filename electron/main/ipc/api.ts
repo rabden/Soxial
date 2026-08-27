@@ -8,6 +8,8 @@ import {
   getDefaultModel,
   getModelExhaustionStatus,
   getSelectedModel,
+  getAppMode,
+  setAppMode,
   listCustomProviders,
   listActiveCustomProviders,
   getCustomProviderCredential,
@@ -53,6 +55,11 @@ export function registerApiHandlers(): void {
   ipcMain.handle('api:getDefaultModel', () => getDefaultModel())
   ipcMain.handle('api:getSelectedModel', () => getSelectedModel())
   ipcMain.handle('api:setSelectedModel', (_event, model: string) => setSelectedModel(model))
+  ipcMain.handle('api:getAppMode', () => getAppMode())
+  ipcMain.handle('api:setAppMode', (_event, mode: 'agent' | 'human') => {
+    if (mode !== 'agent' && mode !== 'human') throw new Error("Invalid mode. Expected 'agent' or 'human'")
+    return setAppMode(mode)
+  })
   ipcMain.handle('api:getApiKeys', (_event, provider: string = 'google') => (
     getApiKeys(provider).map(({ api_key, ...key }) => ({
       ...key,

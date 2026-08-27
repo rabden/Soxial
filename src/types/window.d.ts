@@ -73,6 +73,8 @@ interface Window {
     getDefaultModel: () => Promise<string>
     getSelectedModel: () => Promise<string | null>
     setSelectedModel: (model: string) => Promise<void>
+    getAppMode: () => Promise<'agent' | 'human'>
+    setAppMode: (mode: 'agent' | 'human') => Promise<void>
     getApiKeys: (provider?: string) => Promise<Array<{ id: number; name: string; api_key: string; provider: string; tier: string; is_active: number; created_at: string; last_used_at: string | null }>>
     addApiKey: (apiKey: string, provider?: string) => Promise<number>
     removeApiKey: (id: number) => Promise<void>

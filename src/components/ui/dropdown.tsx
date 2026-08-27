@@ -3,8 +3,8 @@
 import * as React from "react";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { ChevronRight, ChevronLeft, Check, Circle } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { useMaterialRipple } from "@/components/ui/use-ripple";
+import { cn } from "src/lib/utils";
+import { useMaterialRipple } from "src/components/ui/use-ripple";
 
 // --- 0. HELPER: DYNAMIC RADIUS EXTRACTOR ---
 function extractBorderRadius(className?: string): string {
