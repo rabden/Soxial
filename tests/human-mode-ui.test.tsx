@@ -6,20 +6,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 // framer-motion's projection layer expects a real browser document. These
 // tests assert navigation behaviour, not animation, so collapse motion to
 // identity elements.
-vi.mock('motion/react', async () => {
-  const React = await import('react')
-  const identity =
-    (tag: string) =>
-    ({ children, ...props }: any) =>
-      React.createElement(tag, props, children)
-  return {
-    motion: new Proxy(
-      {},
-      { get: (_t, tag: string) => identity(tag) }
-    ),
-    AnimatePresence: ({ children }: any) => React.createElement(React.Fragment, null, children),
-  }
-})
+vi.mock('motion/react', () => import('./helpers/human-ui-mocks').then((m) => m.motionReactMock))
 import Sidebar from 'src/components/Sidebar'
 import HumanPage from 'src/features/human'
 

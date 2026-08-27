@@ -167,6 +167,7 @@ describe('human:feed handler — connector seam', () => {
       ok: false,
       data: null,
       error: 'No Twitter cookies found',
+      errorCode: 'not_authenticated',
     } as CliResult)
 
     const result = await handlers['human:feed']({}, { type: 'for-you' })
@@ -174,6 +175,23 @@ describe('human:feed handler — connector seam', () => {
     expect(result.ok).toBe(false)
     expect(result.error.category).toBe('auth')
     expect(result.error.action).toBe('reauthenticate')
+    expect(runTwitterCli).not.toHaveBeenCalled()
+  })
+
+  it('maps a transient session-check failure to a network error, not the auth gate', async () => {
+    // Spawn failure / timeout during `twitter status` — no structured code and
+    // no explicit authenticated:false payload. Must NOT render as the auth gate.
+    vi.mocked(ensureTwitterAuth).mockResolvedValue({
+      ok: false,
+      data: null,
+      error: 'Command timed out after 30000ms',
+    } as CliResult)
+
+    const result = await handlers['human:feed']({}, { type: 'for-you' })
+
+    expect(result.ok).toBe(false)
+    expect(result.error.category).toBe('network')
+    expect(result.error.retryable).toBe(true)
     expect(runTwitterCli).not.toHaveBeenCalled()
   })
 
@@ -251,6 +269,7 @@ describe('human:verifySession handler', () => {
       ok: false,
       data: null,
       error: 'No cookies',
+      errorCode: 'not_authenticated',
     } as CliResult)
 
     const result = await handlers['human:verifySession']({}, undefined)

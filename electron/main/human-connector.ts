@@ -114,10 +114,18 @@ export type HumanSessionResult = HumanSessionOk | HumanSessionErr
 export async function verifyHumanSession(): Promise<HumanSessionResult> {
   const status = await humanCliQueue.run('twitter', () => ensureTwitterAuth())
   if (!status.ok) {
-    return {
-      ok: false,
-      error: mapCliError({ error: status.error, errorCode: status.errorCode ?? 'not_authenticated' }),
-    }
+    // A structured code maps directly; a status payload that explicitly says
+    // `authenticated: false` is an auth failure; anything else (spawn error,
+    // timeout, no JSON) is transient and must NOT render as the auth gate.
+    const explicitAuthFailure =
+      status.data && typeof status.data === 'object' && 'authenticated' in (status.data as object)
+        ? (status.data as { authenticated?: unknown }).authenticated === false
+        : false
+    const transient = /timed? ?out|timeout|spawn|enoent|econn|network|temporarily/i.test(status.error ?? '')
+    const errorCode =
+      status.errorCode ??
+      (explicitAuthFailure ? 'not_authenticated' : transient ? 'network_error' : undefined)
+    return { ok: false, error: mapCliError({ error: status.error, errorCode }) }
   }
   const user = status.data?.user ?? null
   return { ok: true, data: { authenticated: true, user } }
@@ -129,6 +137,15 @@ export function clampHumanCount(count: unknown): number {
   const n = typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : NaN
   if (!Number.isFinite(n) || n < 1) return HUMAN_PAGE_SIZE
   return Math.min(n, HUMAN_MAX_COUNT)
+}
+
+/** Clamp for count-growth surfaces (bookmarks, follow lists): pages grow the
+ *  requested count toward the connector's 200 hard cap, then stop. Unlike
+ *  clampHumanCount this permits up to HUMAN_CLI_HARD_CAP. */
+export function clampGrowthCount(count: unknown): number {
+  const n = typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : NaN
+  if (!Number.isFinite(n) || n < 1) return HUMAN_PAGE_SIZE
+  return Math.min(n, HUMAN_CLI_HARD_CAP)
 }
 
 const CURSOR_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,255}$/

@@ -78,7 +78,7 @@ describe('human:followList handler — connector seam (T6)', () => {
   })
 
   it('gates on session before invoking the connector', async () => {
-    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies' } as CliResult)
+    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies', errorCode: 'not_authenticated' } as CliResult)
 
     const result = await handlers['human:followList']({}, { subTab: 'following' })
     expect(result.ok).toBe(false)
@@ -142,7 +142,7 @@ describe('human:followAction handler — connector seam (T6)', () => {
   })
 
   it('gates on session first and maps write errors', async () => {
-    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'nope' } as CliResult)
+    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'nope', errorCode: 'not_authenticated' } as CliResult)
     const gated = await handlers['human:followAction']({}, { handle: 'bob', action: 'follow' })
     expect(gated.error.category).toBe('auth')
 

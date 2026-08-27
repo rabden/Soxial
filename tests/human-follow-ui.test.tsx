@@ -5,40 +5,15 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { AppError } from 'src/types/app-error'
 import type { HumanResult, HumanUser, Paginated } from 'src/features/human/types'
 
-vi.mock('motion/react', async () => {
-  const React = await import('react')
-  const identity =
-    (tag: string) =>
-    ({ children, ...props }: any) =>
-      React.createElement(tag, props, children)
-  return {
-    motion: new Proxy({}, { get: (_t, tag: string) => identity(tag) }),
-    AnimatePresence: ({ children }: any) => React.createElement(React.Fragment, null, children),
-  }
-})
+vi.mock('motion/react', () => import('./helpers/human-ui-mocks').then((m) => m.motionReactMock))
 
 import HumanFollow from 'src/features/human/components/HumanFollow'
 
-class FakeIntersectionObserver {
-  static instances: FakeIntersectionObserver[] = []
-  callback: (entries: Array<{ isIntersecting: boolean }>, observer: unknown) => void
-  constructor(
-    callback: (entries: Array<{ isIntersecting: boolean }>, observer: unknown) => void,
-    _options?: IntersectionObserverInit,
-  ) {
-    this.callback = callback
-    FakeIntersectionObserver.instances.push(this)
-  }
-  observe = vi.fn()
-  unobserve = vi.fn()
-  disconnect = vi.fn()
-}
-
-function markSentinelIntersecting() {
-  for (const observer of FakeIntersectionObserver.instances) {
-    observer.callback([{ isIntersecting: true }], observer)
-  }
-}
+import {
+  FakeIntersectionObserver,
+  installFakeIntersectionObserver,
+  markSentinelIntersecting,
+} from './helpers/human-ui-mocks'
 
 const listMock = vi.fn()
 const actionMock = vi.fn()
@@ -65,7 +40,7 @@ function appError(overrides: Partial<AppError>): AppError {
 
 beforeEach(() => {
   cleanup()
-  FakeIntersectionObserver.instances = []
+  installFakeIntersectionObserver()
   ;(globalThis as any).IntersectionObserver = FakeIntersectionObserver
   listMock.mockReset()
   actionMock.mockReset()

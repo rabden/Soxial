@@ -1,4 +1,4 @@
-import type { AppError } from 'src/types/app-error'
+import type { AppError } from '../../types/app-error'
 
 export type Mode = 'agent' | 'human'
 
@@ -7,6 +7,13 @@ export type HumanTab = 'feed' | 'profile' | 'bookmarks' | 'follow' | 'search'
 export type HumanProfileSubTab = 'posts' | 'replies'
 
 export type HumanFollowSubTab = 'following' | 'followers'
+
+/**
+ * The connector's own hard cap (`rateLimit.maxCount`, config.py). Count-growth
+ * surfaces (bookmarks, follow lists) grow toward it, then stop. Shared by the
+ * main-process clamp and the renderer growth math so they cannot drift.
+ */
+export const HUMAN_LIST_HARD_CAP = 200
 
 /* ------------------------------------------------------------------ *
  * Connector data contract (full/non-compact twitter-cli output).
