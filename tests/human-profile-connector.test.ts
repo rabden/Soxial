@@ -125,7 +125,7 @@ describe('human:profile handler — connector seam', () => {
   })
 
   it('gates on session before invoking whoami', async () => {
-    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies' } as CliResult)
+    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies', errorCode: 'not_authenticated' } as CliResult)
 
     const result = await handlers['human:profile']({}, undefined)
 
@@ -158,14 +158,14 @@ describe('human:profilePosts handler — connector seam', () => {
     expect(result).toEqual({ ok: true, data: { items: [{ id: '1' }, { id: '2' }], hasMore: false } })
   })
 
-  it('builds Replies args with --exclude retweets', async () => {
+  it('builds Replies args with the filter:replies operator', async () => {
     vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
     vi.mocked(runTwitterCli).mockResolvedValue({ ok: true, data: [] } as CliResult)
 
     await handlers['human:profilePosts']({}, { subTab: 'replies', count: 5 })
 
     expect(runTwitterCli).toHaveBeenCalledWith(
-      ['search', '--json', '--from', 'alice', '--exclude', 'retweets', '-n', '5'],
+      ['search', 'filter:replies', '--json', '--from', 'alice', '-n', '5'],
       { compact: false, timeoutMs: 30_000 },
     )
   })

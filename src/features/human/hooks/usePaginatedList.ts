@@ -110,9 +110,12 @@ export function usePaginatedList<T>({
             ? optionsRef.current.deriveNextCursor(page)
             : page.nextCursor
           // A page claiming more but yielding no continuation token cannot
-          // advance — treat it as the end.
+          // advance — treat it as the end. Likewise a windowed cursor that
+          // did not move (a full page sharing one day) would refetch the
+          // identical window forever — stop instead of hammering the session.
+          const windowStalled = mode === 'more' && next !== undefined && next === cursor
           cursorRef.current = next
-          setHasMore(page.hasMore && Boolean(next))
+          setHasMore(page.hasMore && Boolean(next) && !windowStalled)
         } else if (mode === 'initial') {
           setItems([])
           setHasMore(false)

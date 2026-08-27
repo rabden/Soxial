@@ -1,14 +1,12 @@
-import { useCallback, useState } from 'react'
 import { Loader2, Bookmark as BookmarkIcon } from 'lucide-react'
 import { TweetCard, parseTweetData } from 'src/components/ui/tweet-card'
 import { OperationalError } from 'src/components/ui/operational-error'
 import { usePaginatedList } from '../hooks/usePaginatedList'
+import { useSessionRecheck } from '../hooks/useSessionRecheck'
 import { AuthGate } from './AuthGate'
 import { EmptyState } from './EmptyState'
-import type { HumanTweet, Paginated } from '../types'
+import { HUMAN_LIST_HARD_CAP, type HumanTweet, Paginated } from '../types'
 
-/** Connector hard cap for bookmarks (contract §2) — growth stops here. */
-const BOOKMARKS_CAP = 200
 const PAGE_GROWTH = 10
 
 /**
@@ -17,8 +15,6 @@ const PAGE_GROWTH = 10
  * seen; the list de-duplicates), stopping at the connector's 200 cap.
  */
 export default function HumanBookmarks() {
-  const [rechecking, setRechecking] = useState(false)
-
   const list = usePaginatedList<HumanTweet>({
     resetKey: 'bookmarks',
     fetchPage: (cursor) =>
@@ -26,19 +22,11 @@ export default function HumanBookmarks() {
     getItemId: (tweet) => tweet.id,
     deriveNextCursor: (page: Paginated<HumanTweet>) => {
       const next = page.items.length + PAGE_GROWTH
-      return next <= BOOKMARKS_CAP ? String(next) : undefined
+      return next <= HUMAN_LIST_HARD_CAP ? String(next) : undefined
     },
   })
 
-  const recheck = useCallback(async () => {
-    setRechecking(true)
-    try {
-      const session = await window.api.humanVerifySession()
-      if (session.ok && session.data.authenticated) list.reload()
-    } finally {
-      setRechecking(false)
-    }
-  }, [list.reload])
+  const { recheck, rechecking } = useSessionRecheck(list.reload)
 
   const authError = !list.loading && list.error?.category === 'auth'
   const surfaceError = !list.loading && list.error && list.error.category !== 'auth'

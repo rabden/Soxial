@@ -143,7 +143,7 @@ describe('human:search handler — connector seam (T7)', () => {
   })
 
   it('gates on session first', async () => {
-    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies' } as CliResult)
+    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies', errorCode: 'not_authenticated' } as CliResult)
 
     const result = await handlers['human:search']({}, { query: 'x' })
     expect(result.ok).toBe(false)

@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PuterAuthEvent } from '../../src/types/puter-auth-events'
+import type {
+  HumanFeedRequest,
+  HumanFollowListRequest,
+  HumanProfilePostsRequest,
+  HumanSearchRequest,
+} from '../../src/features/human/types'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_event: Electron.IpcRendererEvent, payload: T) => cb(payload)
@@ -31,31 +37,15 @@ const api = {
   checkCliAuth: (name: 'twitter' | 'rdt') => ipcRenderer.invoke('cli:checkAuth', name),
   twitterTweet: (tweetId: string, max?: number) => ipcRenderer.invoke('cli:twitterTweet', tweetId, max),
   redditRead: (postId: string, maxComments?: number) => ipcRenderer.invoke('cli:redditRead', postId, maxComments),
-  humanFeed: (request: { type?: 'for-you' | 'following'; count?: number; cursor?: string }) =>
-    ipcRenderer.invoke('human:feed', request),
+  humanFeed: (request: HumanFeedRequest) => ipcRenderer.invoke('human:feed', request),
   humanVerifySession: () => ipcRenderer.invoke('human:verifySession'),
   humanProfile: () => ipcRenderer.invoke('human:profile'),
-  humanProfilePosts: (request: { subTab: 'posts' | 'replies'; count?: number; until?: string }) =>
-    ipcRenderer.invoke('human:profilePosts', request),
+  humanProfilePosts: (request: HumanProfilePostsRequest) => ipcRenderer.invoke('human:profilePosts', request),
   humanBookmarks: (request: { count?: number }) => ipcRenderer.invoke('human:bookmarks', request),
-  humanFollowList: (request: { subTab: 'following' | 'followers'; count?: number }) =>
-    ipcRenderer.invoke('human:followList', request),
+  humanFollowList: (request: HumanFollowListRequest) => ipcRenderer.invoke('human:followList', request),
   humanFollowAction: (request: { handle: string; action: 'follow' | 'unfollow' }) =>
     ipcRenderer.invoke('human:followAction', request),
-  humanSearch: (request: {
-    query: string
-    product?: 'Top' | 'Latest' | 'Photos' | 'Videos'
-    count?: number
-    until?: string
-    from?: string
-    to?: string
-    lang?: string
-    since?: string
-    has?: Array<'links' | 'images' | 'videos' | 'media'>
-    exclude?: Array<'retweets' | 'replies' | 'links'>
-    minLikes?: number
-    minRetweets?: number
-  }) => ipcRenderer.invoke('human:search', request),
+  humanSearch: (request: HumanSearchRequest) => ipcRenderer.invoke('human:search', request),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),
   runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => ipcRenderer.invoke('onboarding:run', profileData, continueFromMessages, runId),

@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import {
+  clampGrowthCount,
   clampHumanCount,
   extractHumanItems,
   HUMAN_CLI_HARD_CAP,
@@ -15,39 +16,18 @@ import {
 } from '../human-connector'
 import { normalizeTwitterHandle } from '../twitter-handle'
 import { isTwitterHandleRebuildActive } from '../twitter-handle-rebuild'
+// Request shapes live in one place: the renderer contract module.
+import type {
+  HumanFeedRequest,
+  HumanFollowListRequest,
+  HumanProfilePostsRequest,
+  HumanSearchRequest,
+} from '../../../src/features/human/types'
 
-export interface HumanFeedRequest {
-  type?: 'for-you' | 'following'
-  count?: number
-  cursor?: string
-}
+export type { HumanFeedRequest, HumanFollowListRequest, HumanProfilePostsRequest, HumanSearchRequest }
 
-export interface HumanProfilePostsRequest {
-  subTab: 'posts' | 'replies'
-  count?: number
-  /** Date window (YYYY-MM-DD): only items older than this day (X `until:`). */
-  until?: string
-}
-
-export interface HumanFollowListRequest {
-  subTab: 'following' | 'followers'
-  count?: number
-}
-
-export interface HumanSearchRequest {
-  query: string
-  product?: 'Top' | 'Latest' | 'Photos' | 'Videos'
-  count?: number
-  /** Date-window cursor (YYYY-MM-DD) — deeper pages search older than this. */
-  until?: string
-  from?: string
-  to?: string
-  lang?: string
-  since?: string
-  has?: Array<'links' | 'images' | 'videos' | 'media'>
-  exclude?: Array<'retweets' | 'replies' | 'links'>
-  minLikes?: number
-  minRetweets?: number
+function authError(session: Extract<HumanSessionResult, { ok: false }>) {
+  return { ok: false as const, error: session.error }
 }
 
 const SEARCH_PRODUCTS = new Set(['Top', 'Latest', 'Photos', 'Videos'])
@@ -55,8 +35,8 @@ const SEARCH_HAS = new Set(['links', 'images', 'videos', 'media'])
 const SEARCH_EXCLUDE = new Set(['retweets', 'replies', 'links'])
 const LANG_RE = /^[a-z]{2}$/i
 
-function invalid(message: string) {
-  return { ok: false as const, error: mapCliError({ error: message, errorCode: 'invalid_input' }) }
+function invalidError(message: string) {
+  return mapCliError({ error: message, errorCode: 'invalid_input' })
 }
 
 function searchHandle(value: unknown, flag: string): string | undefined | { error: string } {
@@ -73,10 +53,10 @@ function searchHandle(value: unknown, flag: string): string | undefined | { erro
 /** Build validated `search` args; every filter the renderer surfaces passes through. */
 function buildSearchArgs(request: HumanSearchRequest): { ok: true; args: string[] } | { ok: false; error: ReturnType<typeof mapCliError> } {
   const query = typeof request.query === 'string' ? request.query.trim() : ''
-  if (!query) return { ok: false, error: invalid('Enter a search query.').error }
-  if (query.length > 500) return { ok: false, error: invalid('Search query is too long (max 500 characters).').error }
+  if (!query) return { ok: false, error: invalidError('Enter a search query.') }
+  if (query.length > 500) return { ok: false, error: invalidError('Search query is too long (max 500 characters).') }
   if (query.startsWith('-')) {
-    return { ok: false, error: invalid('Query cannot start with "-" (the connector parses it as a flag).').error }
+    return { ok: false, error: invalidError('Query cannot start with "-" (the connector parses it as a flag).') }
   }
 
   const product = request.product && SEARCH_PRODUCTS.has(request.product) ? request.product : 'Top'
@@ -84,13 +64,13 @@ function buildSearchArgs(request: HumanSearchRequest): { ok: true; args: string[
 
   for (const [flag, value] of [['--from', request.from], ['--to', request.to]] as const) {
     const handle = searchHandle(value, flag)
-    if (typeof handle === 'object' && handle !== null) return { ok: false, error: invalid(handle.error).error }
+    if (typeof handle === 'object' && handle !== null) return { ok: false, error: invalidError(handle.error) }
     if (handle) args.push(flag, handle)
   }
 
   if (request.lang !== undefined && request.lang !== '') {
     if (typeof request.lang !== 'string' || !LANG_RE.test(request.lang)) {
-      return { ok: false, error: invalid('Language must be a 2-letter ISO code (e.g. en).').error }
+      return { ok: false, error: invalidError('Language must be a 2-letter ISO code (e.g. en).') }
     }
     args.push('--lang', request.lang.toLowerCase())
   }
@@ -98,23 +78,23 @@ function buildSearchArgs(request: HumanSearchRequest): { ok: true; args: string[
   for (const [flag, value] of [['--since', request.since], ['--until', request.until]] as const) {
     const date = sanitizeIsoDate(value)
     if (value !== undefined && value !== '' && !date) {
-      return { ok: false, error: invalid(`${flag} must be a YYYY-MM-DD date.`).error }
+      return { ok: false, error: invalidError(`${flag} must be a YYYY-MM-DD date.`) }
     }
     if (date) args.push(flag, date)
   }
 
   if (request.has !== undefined) {
-    if (!Array.isArray(request.has)) return { ok: false, error: invalid('has must be a list.').error }
+    if (!Array.isArray(request.has)) return { ok: false, error: invalidError('has must be a list.') }
     for (const item of request.has) {
-      if (!SEARCH_HAS.has(String(item))) return { ok: false, error: invalid(`Unsupported --has value: ${String(item)}`).error }
+      if (!SEARCH_HAS.has(String(item))) return { ok: false, error: invalidError(`Unsupported --has value: ${String(item)}`) }
       args.push('--has', String(item))
     }
   }
 
   if (request.exclude !== undefined) {
-    if (!Array.isArray(request.exclude)) return { ok: false, error: invalid('exclude must be a list.').error }
+    if (!Array.isArray(request.exclude)) return { ok: false, error: invalidError('exclude must be a list.') }
     for (const item of request.exclude) {
-      if (!SEARCH_EXCLUDE.has(String(item))) return { ok: false, error: invalid(`Unsupported --exclude value: ${String(item)}`).error }
+      if (!SEARCH_EXCLUDE.has(String(item))) return { ok: false, error: invalidError(`Unsupported --exclude value: ${String(item)}`) }
       args.push('--exclude', String(item))
     }
   }
@@ -122,16 +102,12 @@ function buildSearchArgs(request: HumanSearchRequest): { ok: true; args: string[
   for (const [flag, value] of [['--min-likes', request.minLikes], ['--min-retweets', request.minRetweets]] as const) {
     if (value === undefined || value === null) continue
     if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 10_000_000) {
-      return { ok: false, error: invalid(`${flag} must be a whole number between 0 and 10,000,000.`).error }
+      return { ok: false, error: invalidError(`${flag} must be a whole number between 0 and 10,000,000.`) }
     }
     args.push(flag, String(value))
   }
 
   return { ok: true, args }
-}
-
-function authError(session: Extract<HumanSessionResult, { ok: false }>) {
-  return { ok: false as const, error: session.error }
 }
 
 /** Resolve the signed-in handle through the session gate shared by handlers. */
@@ -200,18 +176,15 @@ export function registerHumanHandlers(): void {
     if (!guarded.ok) return { ok: false as const, error: guarded.error }
 
     const count = clampHumanCount(request?.count)
-    // Posts = authored non-replies; Replies = authored minus retweets
-    // (contract §7 — `filter:replies` semantics via the exclude set).
-    const args = [
-      'search',
-      '--json',
-      '--from',
-      guarded.handle,
-      '--exclude',
-      request?.subTab === 'replies' ? 'retweets' : 'replies',
-      '-n',
-      String(count),
-    ]
+    // Posts = authored non-replies (`--exclude replies`). Replies must be
+    // positively selected: `--exclude retweets` alone still returns standalone
+    // posts, so the Replies tab passes the `filter:replies` operator through
+    // the query text (the CLI has no --has replies choice; the operator is
+    // composed into rawQuery verbatim, contract §7 + search.py:105-113).
+    const args =
+      request?.subTab === 'replies'
+        ? ['search', 'filter:replies', '--json', '--from', guarded.handle, '-n', String(count)]
+        : ['search', '--json', '--from', guarded.handle, '--exclude', 'replies', '-n', String(count)]
     const until = sanitizeIsoDate(request?.until)
     if (until) args.push('--until', until)
 
@@ -225,12 +198,8 @@ export function registerHumanHandlers(): void {
     if (!session.ok) return authError(session)
 
     // No cursor for bookmarks — pages grow the requested count toward the
-    // connector's 200 hard cap, then stop (contract §2). Note: this clamp
-    // allows up to 200 (unlike the generic 100-count clamp for feed/search).
-    const rawCount = typeof request.count === 'number' && Number.isFinite(request.count)
-      ? Math.floor(request.count)
-      : 10
-    const count = Math.min(Math.max(rawCount, 1), HUMAN_CLI_HARD_CAP)
+    // connector's 200 hard cap, then stop (contract §2).
+    const count = clampGrowthCount(request.count)
     const res = await runHumanTwitterCli(['bookmarks', '--json', '-n', String(count)])
     if (!res.ok) return { ok: false as const, error: mapCliError(res) }
 
@@ -244,9 +213,7 @@ export function registerHumanHandlers(): void {
     if (!guarded.ok) return { ok: false as const, error: guarded.error }
 
     // Same count-growth strategy as bookmarks (no cursor, 200 cap).
-    const rawCount =
-      typeof request?.count === 'number' && Number.isFinite(request.count) ? Math.floor(request.count) : 10
-    const count = Math.min(Math.max(rawCount, 1), HUMAN_CLI_HARD_CAP)
+    const count = clampGrowthCount(request?.count)
     const args = [request?.subTab === 'followers' ? 'followers' : 'following', guarded.handle, '--json', '-n', String(count)]
 
     const res = await runHumanTwitterCli(args)

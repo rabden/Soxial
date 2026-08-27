@@ -35,7 +35,7 @@ beforeEach(() => {
 
 describe('human:bookmarks handler — connector seam (T5)', () => {
   it('gates on session before invoking the connector', async () => {
-    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies' } as CliResult)
+    vi.mocked(ensureTwitterAuth).mockResolvedValue({ ok: false, data: null, error: 'no cookies', errorCode: 'not_authenticated' } as CliResult)
 
     const result = await handlers['human:bookmarks']({}, {})
 

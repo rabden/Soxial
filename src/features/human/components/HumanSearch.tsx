@@ -4,20 +4,19 @@ import { Loader2, Search as SearchIcon, SlidersHorizontal } from 'lucide-react'
 import { TweetCard, parseTweetData } from 'src/components/ui/tweet-card'
 import { OperationalError } from 'src/components/ui/operational-error'
 import { usePaginatedList } from '../hooks/usePaginatedList'
+import { useSessionRecheck } from '../hooks/useSessionRecheck'
 import { AuthGate } from './AuthGate'
 import { EmptyState } from './EmptyState'
+import { springTransition } from '../spring'
 import { oldestTweetDate } from '../utils'
 import type { HumanSearchRequest, HumanTweet } from '../types'
-
-const springTransition = {
-  type: 'spring' as const,
-  stiffness: 450,
-  damping: 38,
-}
 
 const PRODUCTS: Array<NonNullable<HumanSearchRequest['product']>> = ['Top', 'Latest', 'Photos', 'Videos']
 
 const DEBOUNCE_MS = 300
+
+const HAS_CHOICES = ['links', 'images', 'videos', 'media'] as const
+const EXCLUDE_CHOICES = ['retweets', 'replies', 'links'] as const
 
 interface SearchFilters {
   from: string
@@ -26,9 +25,20 @@ interface SearchFilters {
   since: string
   until: string
   minLikes: string
+  has: Array<(typeof HAS_CHOICES)[number]>
+  exclude: Array<(typeof EXCLUDE_CHOICES)[number]>
 }
 
-const EMPTY_FILTERS: SearchFilters = { from: '', to: '', lang: '', since: '', until: '', minLikes: '' }
+const EMPTY_FILTERS: SearchFilters = {
+  from: '',
+  to: '',
+  lang: '',
+  since: '',
+  until: '',
+  minLikes: '',
+  has: [],
+  exclude: [],
+}
 
 /**
  * Search X: debounced query input, Top/Latest/Photos/Videos result tabs and
@@ -42,13 +52,20 @@ export default function HumanSearch({ disabled = false }: { disabled?: boolean }
   const [product, setProduct] = useState<NonNullable<HumanSearchRequest['product']>>('Top')
   const [showFilters, setShowFilters] = useState(false)
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS)
-  const [rechecking, setRechecking] = useState(false)
 
   // Debounce keystrokes so typing never burns rate limits.
   useEffect(() => {
     const timer = setTimeout(() => setQuery(inputValue.trim()), DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [inputValue])
+
+  const filtersActive = useMemo(
+    () =>
+      Object.entries(EMPTY_FILTERS).some(
+        ([key, empty]) => JSON.stringify(filters[key as keyof SearchFilters]) !== JSON.stringify(empty),
+      ),
+    [filters],
+  )
 
   const activeFilters = useMemo(
     () => ({
@@ -58,6 +75,8 @@ export default function HumanSearch({ disabled = false }: { disabled?: boolean }
       since: filters.since.trim() || undefined,
       until: filters.until.trim() || undefined,
       minLikes: filters.minLikes.trim() ? Number(filters.minLikes) : undefined,
+      has: filters.has.length > 0 ? filters.has : undefined,
+      exclude: filters.exclude.length > 0 ? filters.exclude : undefined,
     }),
     [filters],
   )
@@ -82,15 +101,7 @@ export default function HumanSearch({ disabled = false }: { disabled?: boolean }
     deriveNextCursor: oldestTweetDate,
   })
 
-  const recheck = async () => {
-    setRechecking(true)
-    try {
-      const session = await window.api.humanVerifySession()
-      if (session.ok && session.data.authenticated) results.reload()
-    } finally {
-      setRechecking(false)
-    }
-  }
+  const { recheck, rechecking } = useSessionRecheck(results.reload)
 
   const authError = !results.loading && results.error?.category === 'auth'
   const surfaceError = !results.loading && results.error && results.error.category !== 'auth'
@@ -122,9 +133,7 @@ export default function HumanSearch({ disabled = false }: { disabled?: boolean }
               aria-expanded={showFilters}
               aria-label="Toggle filters"
               className={`inline-flex size-9 shrink-0 items-center justify-center rounded-full transition-colors ${
-                showFilters || filterKey !== JSON.stringify({
-                  from: undefined, to: undefined, lang: undefined, since: undefined, until: undefined, minLikes: undefined,
-                })
+                showFilters || filtersActive
                   ? 'bg-[#1d9bf0]/15 text-[#1d9bf0]'
                   : 'bg-white/[0.06] text-zinc-400 hover:text-white'
               } ${disabled ? 'opacity-40 pointer-events-none' : ''}`}
@@ -134,27 +143,69 @@ export default function HumanSearch({ disabled = false }: { disabled?: boolean }
           </div>
 
           {showFilters && (
-            <div className="mt-2 grid grid-cols-2 gap-2 pb-1 sm:grid-cols-3" inert={disabled || undefined}>
+            <div className="mt-2 space-y-2 pb-1" inert={disabled || undefined}>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {(
+                  [
+                    ['from', 'From (@handle)'],
+                    ['to', 'To (@handle)'],
+                    ['lang', 'Language (en)'],
+                    ['since', 'Since (YYYY-MM-DD)'],
+                    ['until', 'Until (YYYY-MM-DD)'],
+                    ['minLikes', 'Min likes'],
+                  ] as Array<[keyof SearchFilters, string]>
+                ).map(([key, label]) => (
+                  <label
+                    key={key}
+                    className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500"
+                  >
+                    {label}
+                    <input
+                      type="text"
+                      value={filters[key] as string}
+                      disabled={disabled}
+                      onChange={(e) => setFilters((prev) => ({ ...prev, [key]: e.target.value }))}
+                      className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-xs font-normal normal-case tracking-normal text-white placeholder:text-zinc-600 focus:border-[#1d9bf0] focus:outline-none"
+                    />
+                  </label>
+                ))}
+              </div>
+
+              {/* Content-type filters (repeatable connector choices) */}
               {(
                 [
-                  ['from', 'From (@handle)'],
-                  ['to', 'To (@handle)'],
-                  ['lang', 'Language (en)'],
-                  ['since', 'Since (YYYY-MM-DD)'],
-                  ['until', 'Until (YYYY-MM-DD)'],
-                  ['minLikes', 'Min likes'],
-                ] as Array<[keyof SearchFilters, string]>
-              ).map(([key, label]) => (
-                <label key={key} className="flex flex-col gap-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                  {label}
-                  <input
-                    type="text"
-                    value={filters[key]}
-                    disabled={disabled}
-                    onChange={(e) => setFilters((prev) => ({ ...prev, [key]: e.target.value }))}
-                    className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-xs font-normal normal-case tracking-normal text-white placeholder:text-zinc-600 focus:border-[#1d9bf0] focus:outline-none"
-                  />
-                </label>
+                  { key: 'has', choices: HAS_CHOICES, label: 'Has' },
+                  { key: 'exclude', choices: EXCLUDE_CHOICES, label: 'Exclude' },
+                ] as const
+              ).map(({ key, choices, label }) => (
+                <div key={key} className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{label}</span>
+                  {choices.map((choice) => {
+                    const selected = (filters[key] as string[]).includes(choice)
+                    return (
+                      <button
+                        key={choice}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() =>
+                          setFilters((prev) => ({
+                            ...prev,
+                            [key]: selected
+                              ? (prev[key] as string[]).filter((item) => item !== choice)
+                              : [...(prev[key] as string[]), choice],
+                          }) as SearchFilters)
+                        }
+                        className={`rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                          selected
+                            ? 'border-[#1d9bf0]/50 bg-[#1d9bf0]/15 text-[#1d9bf0]'
+                            : 'border-white/[0.08] bg-white/[0.03] text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {choice}
+                      </button>
+                    )
+                  })}
+                </div>
               ))}
             </div>
           )}

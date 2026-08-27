@@ -1,26 +1,20 @@
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 import { motion } from 'motion/react'
 import { Loader2, UserPlus, Users } from 'lucide-react'
 import { OperationalError } from 'src/components/ui/operational-error'
 import { usePaginatedList } from '../hooks/usePaginatedList'
+import { useSessionRecheck } from '../hooks/useSessionRecheck'
 import { AuthGate } from './AuthGate'
 import { EmptyState } from './EmptyState'
 import { UserFollowRow } from './UserFollowRow'
-import type { HumanFollowSubTab, HumanUser, Paginated } from '../types'
-
-const springTransition = {
-  type: 'spring' as const,
-  stiffness: 450,
-  damping: 38,
-}
+import { springTransition } from '../spring'
+import { HUMAN_LIST_HARD_CAP, type HumanFollowSubTab, HumanUser, Paginated } from '../types'
 
 const SUB_TABS: Array<{ id: HumanFollowSubTab; label: string }> = [
   { id: 'following', label: 'Following' },
   { id: 'followers', label: 'Followers' },
 ]
 
-/** Connector hard cap for the follow lists (contract §2). */
-const LIST_CAP = 200
 const PAGE_GROWTH = 10
 
 /**
@@ -30,7 +24,6 @@ const PAGE_GROWTH = 10
  */
 export default function HumanFollow({ disabled = false }: { disabled?: boolean }) {
   const [subTab, setSubTab] = useState<HumanFollowSubTab>('following')
-  const [rechecking, setRechecking] = useState(false)
 
   const list = usePaginatedList<HumanUser>({
     resetKey: subTab,
@@ -39,19 +32,11 @@ export default function HumanFollow({ disabled = false }: { disabled?: boolean }
     getItemId: (user) => user.screenName,
     deriveNextCursor: (page: Paginated<HumanUser>) => {
       const next = page.items.length + PAGE_GROWTH
-      return next <= LIST_CAP ? String(next) : undefined
+      return next <= HUMAN_LIST_HARD_CAP ? String(next) : undefined
     },
   })
 
-  const recheck = useCallback(async () => {
-    setRechecking(true)
-    try {
-      const session = await window.api.humanVerifySession()
-      if (session.ok && session.data.authenticated) list.reload()
-    } finally {
-      setRechecking(false)
-    }
-  }, [list.reload])
+  const { recheck, rechecking } = useSessionRecheck(list.reload)
 
   const authError = !list.loading && list.error?.category === 'auth'
   const surfaceError = !list.loading && list.error && list.error.category !== 'auth'

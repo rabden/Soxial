@@ -1,18 +1,15 @@
-import { useCallback, useState } from 'react'
+import { useState } from 'react'
 import { motion } from 'motion/react'
 import { Loader2, Newspaper } from 'lucide-react'
+import type { AppError } from 'src/types/app-error'
 import { TweetCard, parseTweetData } from 'src/components/ui/tweet-card'
 import { OperationalError } from 'src/components/ui/operational-error'
 import { usePaginatedList } from '../hooks/usePaginatedList'
+import { useSessionRecheck } from '../hooks/useSessionRecheck'
 import { AuthGate } from './AuthGate'
 import { EmptyState } from './EmptyState'
+import { springTransition } from '../spring'
 import type { HumanFeedType, HumanTweet } from '../types'
-
-const springTransition = {
-  type: 'spring' as const,
-  stiffness: 450,
-  damping: 38,
-}
 
 const FEED_TABS: Array<{ id: HumanFeedType; label: string }> = [
   { id: 'for-you', label: 'For you' },
@@ -42,7 +39,6 @@ function FeedSkeleton() {
  */
 export default function HumanFeed({ disabled = false }: { disabled?: boolean }) {
   const [feedType, setFeedType] = useState<HumanFeedType>('for-you')
-  const [rechecking, setRechecking] = useState(false)
 
   const feed = usePaginatedList<HumanTweet>({
     resetKey: feedType,
@@ -50,15 +46,7 @@ export default function HumanFeed({ disabled = false }: { disabled?: boolean }) 
     getItemId: (tweet) => tweet.id,
   })
 
-  const recheck = useCallback(async () => {
-    setRechecking(true)
-    try {
-      const session = await window.api.humanVerifySession()
-      if (session.ok && session.data.authenticated) feed.reload()
-    } finally {
-      setRechecking(false)
-    }
-  }, [feed.reload])
+  const { recheck, rechecking } = useSessionRecheck(feed.reload)
 
   const authError = !feed.loading && feed.error?.category === 'auth'
   const surfaceError = !feed.loading && feed.error && feed.error.category !== 'auth'
