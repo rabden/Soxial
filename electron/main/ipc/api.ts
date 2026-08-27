@@ -23,6 +23,7 @@ import {
   ProviderVerificationResult,
   summarizeVerification,
   verifyCredential,
+  probeModelFor,
 } from '../provider-verification'
 import { logger } from '../log'
 import { parseModelRef, OPENAI_MODEL_CATALOG, ANTHROPIC_MODEL_CATALOG } from '../models'
@@ -165,21 +166,25 @@ export function registerApiHandlers(): void {
   ipcMain.handle('api:verifyCredentials', async (_event, request: ProviderVerificationRequest): Promise<CredentialVerificationReport> => {
     const payload = request && typeof request === 'object' ? request : {}
     const results: ProviderVerificationResult[] = []
+    // Probe with the model the app will actually run so verification covers
+    // both the key and the selected model's availability for this account.
+    const selectedModel = getSelectedModel() ?? getDefaultModel()
 
     for (const provider of ['google', 'zhipu', 'openai', 'anthropic'] as const) {
       const providerRequest = payload[provider]
       if (!providerRequest) continue
       const codingPlan = provider === 'zhipu' ? Boolean(payload.zhipu?.codingPlan) : undefined
+      const probeModel = probeModelFor(provider, selectedModel)
 
       const primary = typeof providerRequest.primary === 'string' ? providerRequest.primary.trim() : ''
       if (primary) {
-        results.push(await verifyCredential({ provider, slot: 'primary' }, primary, { codingPlan }))
+        results.push(await verifyCredential({ provider, slot: 'primary' }, primary, { codingPlan, probeModel }))
       }
 
       const additional = Array.isArray(providerRequest.additional) ? providerRequest.additional : []
       for (const [index, value] of additional.entries()) {
         if (typeof value !== 'string' || !value.trim()) continue
-        results.push(await verifyCredential({ provider, slot: 'additional', index }, value.trim(), { codingPlan }))
+        results.push(await verifyCredential({ provider, slot: 'additional', index }, value.trim(), { codingPlan, probeModel }))
       }
 
       // Stored keys are verified by id so their secrets never reach the renderer.

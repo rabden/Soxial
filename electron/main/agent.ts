@@ -1,4 +1,5 @@
 import { streamText, generateText as aiGenerateText, isStepCount } from 'ai'
+import { isUnusableCompletion } from './agent-completion'
 import { getProfile, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb, getCustomProviderCredential } from './db'
 import { normalizeModelId, parseModelRef } from './models'
 import { createModelInstance, buildChatFallbackChain } from './providers'
@@ -905,22 +906,12 @@ export function abortableSleep(ms: number, ac?: AbortController): Promise<void> 
 /** Structured terminal-failure information, consumed by IPC error mapping. */
 export interface AgentFailureInfo {
   /** Stable machine kind — mirrors the grok-build SamplingErrorKind idea. */
-  errorKind: 'all-models-exhausted' | 'no-credentials' | 'rate-limited' | 'auth' | 'fatal'
+  errorKind: 'all-models-exhausted' | 'no-credentials' | 'rate-limited' | 'auth' | 'fatal' | 'empty-completions'
   attemptedModels: string[]
   isRateLimited: boolean
 }
 
 const EMPTY_RESPONSE_MAX_RESAMPLES = 1
-
-/** Best-effort count of a finished stream's response messages; never throws. */
-async function peekResponseMessageCount(result: any): Promise<number> {
-  try {
-    const msgs = await result?.responseMessages
-    return Array.isArray(msgs) ? msgs.length : 0
-  } catch {
-    return 0
-  }
-}
 
 /** One streaming agent run: input messages, callbacks, and configuration. */
 export interface RunAgentRequest {
@@ -988,6 +979,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   const stationarityStopGuard = new AbortController()
   const attemptedModels: string[] = []
   let sawRateLimit = false
+  let sawEmptyTurn = false
 
   const userCount = messages.filter(m => m.role === 'user').length
 
@@ -1246,12 +1238,11 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
           logger.info('agent', `done — ${fullText.length} chars total`)
 
           // Empty-response resample (grok-build treats empty completions as
-          // transient): a completion with no text, no reasoning, and no tool
-          // calls is worth exactly one bounded retry before giving up.
-          const isEmptyCompletion =
-            !sawText && !sawReasoning && !sawToolCall &&
-            fullText.trim() === '' &&
-            (await peekResponseMessageCount(result)) === 0
+          // transient): a completion with no usable output — no text and no
+          // tool calls, INCLUDING reasoning-only turns where the model
+          // streamed thoughts but never answered — is worth exactly one
+          // bounded retry before rotating to the next model/key.
+          const isEmptyCompletion = isUnusableCompletion({ sawText, sawReasoning, sawToolCall, text: fullText })
           if (isEmptyCompletion) {
             if (emptyResamples < EMPTY_RESPONSE_MAX_RESAMPLES && !abortController?.signal.aborted) {
               emptyResamples++
@@ -1260,7 +1251,13 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
               await abortableSleep(1200, abortController)
               continue
             }
-            logger.warn('agent', 'empty completion persisted after resample budget')
+            // Resampling did not help — rotate instead of ending the run with
+            // nothing. If the whole chain comes back empty, the run fails with
+            // a specific message instead of a silent 0-char "success".
+            logger.warn('agent', 'empty completion persisted after resample budget — rotating to the next model')
+            sawEmptyTurn = true
+            nextModel = true
+            break
           }
 
           // Persist accumulated messages for next turn's round-trip.
@@ -1368,9 +1365,11 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   onError(
     rateLimitedChain
       ? 'All available models hit rate limits. Wait for the cooldown or add another provider key in Settings.'
-      : 'All available models failed. Check your provider credentials in Settings or try another model.',
+      : sawEmptyTurn
+        ? 'The model returned empty responses. Retry in a moment — if it keeps happening, switch models in Settings.'
+        : 'All available models failed. Check your provider credentials in Settings or try another model.',
     {
-      errorKind: attemptedModels.length === 0 ? 'no-credentials' : rateLimitedChain ? 'rate-limited' : 'all-models-exhausted',
+      errorKind: attemptedModels.length === 0 ? 'no-credentials' : rateLimitedChain ? 'rate-limited' : sawEmptyTurn ? 'empty-completions' : 'all-models-exhausted',
       attemptedModels,
       isRateLimited: rateLimitedChain,
     },
