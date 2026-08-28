@@ -21,26 +21,33 @@ export function registerMediaHandlers(): void {
 
   ipcMain.handle('link:preview', async (_event, url: string) => {
     if (!/^https?:\/\//i.test(url)) {
-      const appError = errorForRenderer('Invalid URL')
-      return { success: false, error: appError.message, appError }
+      return { success: false, data: { url, title: '', description: '', image: '' } }
     }
     try {
+      // 5-second hard timeout so slow/dead external sites don't hang and throw ETIMEDOUT
       const res = await fetch(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
+        signal: AbortSignal.timeout(5000),
       })
+      
+      if (!res.ok) {
+        return { success: false, data: { url, title: '', description: '', image: '' } }
+      }
+
       const html = await res.text()
       const pick = (...patterns: RegExp[]) => patterns.map(pattern => html.match(pattern)?.[1]?.trim()).find(Boolean) || ''
       const decode = (value: string) => value.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       const title = decode(pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i, /<title[^>]*>([^<]+)<\/title>/i))
       const description = decode(pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']twitter:description["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i))
       const image = decode(pick(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i))
+      
       return { success: true, data: { url, title, description, image } }
-    } catch (error: any) {
-      const appError = errorForRenderer(error)
-      return { success: false, error: appError.message, appError }
+    } catch {
+      // Gracefully return empty data instead of crashing or logging an AggregateError
+      return { success: false, data: { url, title: '', description: '', image: '' } }
     }
   })
 }

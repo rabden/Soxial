@@ -225,24 +225,30 @@ app.whenReady().then(() => {
 
   // ponytail: Twitter video CDN 403s requests with non-Twitter Referer.
   // Custom protocol proxies through Node.js fetch (no Referer restriction).
+  // Wrap twimg fetch in try/catch and AbortSignal.timeout to prevent ETIMEDOUT on slow media
   protocol.handle('twimg', async (request) => {
     const actualUrl = request.url.replace(/^twimg:\/\//, 'https://')
     const range = request.headers.get('range')
-    const res = await fetch(actualUrl, {
-      headers: {
-        'Referer': 'https://x.com/',
-        'Origin': 'https://x.com',
-        ...(range ? { Range: range } : {}),
+    try {
+      const res = await fetch(actualUrl, {
+        headers: {
+          'Referer': 'https://x.com/',
+          'Origin': 'https://x.com',
+          ...(range ? { Range: range } : {}),
+        },
+        signal: AbortSignal.timeout(8000), // 8-second ceiling
+      })
+      const headers = new Headers()
+      for (const name of ['accept-ranges', 'content-length', 'content-range', 'content-type']) {
+        const value = res.headers.get(name)
+        if (value) headers.set(name, value)
       }
-    })
-    const headers = new Headers()
-    for (const name of ['accept-ranges', 'content-length', 'content-range', 'content-type']) {
-      const value = res.headers.get(name)
-      if (value) headers.set(name, value)
+      if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream')
+      headers.set('Access-Control-Allow-Origin', '*')
+      return new Response(res.body, { status: res.status, headers })
+    } catch {
+      return new Response(null, { status: 504 })
     }
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream')
-    headers.set('Access-Control-Allow-Origin', '*')
-    return new Response(res.body, { status: res.status, headers })
   })
 
   getDb()
