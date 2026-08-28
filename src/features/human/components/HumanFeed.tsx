@@ -54,37 +54,37 @@ export default function HumanFeed({ disabled = false }: { disabled?: boolean }) 
 
   return (
     <div className="h-full overflow-y-auto scrollbar-none">
-      {/* For you / Following sub-toggle */}
-      <div
-        className="sticky top-0 z-20 flex border-b border-white/[0.06] bg-black/80 backdrop-blur-md"
-        inert={disabled || undefined}
-      >
-        {FEED_TABS.map((tab) => {
-          const active = feedType === tab.id
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              disabled={disabled}
-              onClick={() => setFeedType(tab.id)}
-              className={`relative flex-1 py-3 text-sm font-medium transition-colors hover:text-white ${
-                active ? 'text-white' : 'text-zinc-500'
-              } ${disabled ? 'opacity-40 pointer-events-none' : ''}`}
-            >
-              {tab.label}
-              {active && (
-                <motion.span
-                  layoutId="feedSubToggleIndicator"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1d9bf0]"
-                  transition={springTransition}
-                />
-              )}
-            </button>
-          )
-        })}
-      </div>
-
       <div className="mx-auto max-w-[600px] border-x border-white/[0.06]">
+        {/* For you / Following sub-toggle — constrained to card max-width like Profile/Follow/Search */}
+        <div
+          className="sticky top-0 z-20 flex border-b border-white/[0.06] bg-black/80 backdrop-blur-md"
+          inert={disabled || undefined}
+        >
+          {FEED_TABS.map((tab) => {
+            const active = feedType === tab.id
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => setFeedType(tab.id)}
+                className={`relative flex-1 py-3 text-sm font-medium transition-colors hover:text-white ${
+                  active ? 'text-white' : 'text-zinc-500'
+                } ${disabled ? 'opacity-40 pointer-events-none' : ''}`}
+              >
+                {tab.label}
+                {active && (
+                  <motion.span
+                    layoutId="feedSubToggleIndicator"
+                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1d9bf0]"
+                    transition={springTransition}
+                  />
+                )}
+              </button>
+            )
+          })}
+        </div>
+
         {feed.loading && <FeedSkeleton />}
 
         {authError && (
