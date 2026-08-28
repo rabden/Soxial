@@ -10,7 +10,6 @@ import {
   BarChart2,
   Bookmark,
   Share2,
-  Ellipsis,
 } from 'lucide-react'
 import { PostAttachments, PostAttachment, extractTweetAttachments, expandTweetLinks } from 'src/components/ui/post-attachment'
 import { getCachedPost, cachePost } from 'src/lib/post-cache'
@@ -144,6 +143,19 @@ function fmt(n: number): string {
   return String(n)
 }
 
+function shortDisplayUrl(url: string): string {
+  try {
+    const u = new URL(url)
+    let display = u.hostname.replace(/^www\./, '') + (u.pathname !== '/' ? u.pathname : '')
+    if (display.endsWith('/')) display = display.slice(0, -1)
+    if (u.search) display += u.search
+    if (display.length > 27) return display.slice(0, 27) + '\u2026'
+    return display
+  } catch {
+    return url.length > 30 ? url.slice(0, 30) + '\u2026' : url
+  }
+}
+
 function formatRichContent(text: string): ReactNode {
   if (!text) return text
 
@@ -159,6 +171,7 @@ function formatRichContent(text: string): ReactNode {
     }
     const token = match[0]
     if (token.startsWith('http://') || token.startsWith('https://')) {
+      const display = shortDisplayUrl(token)
       parts.push(
         <a
           key={match.index}
@@ -167,8 +180,9 @@ function formatRichContent(text: string): ReactNode {
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
           className="text-[#1D9BF0] hover:underline"
+          title={token}
         >
-          {token}
+          {display}
         </a>
       )
     } else if (token.startsWith('@')) {
@@ -426,35 +440,18 @@ export function TweetCard({
 
           <div className="flex-1 min-w-0">
             {/* Inline Header */}
-            <div className="flex items-center justify-between gap-1 leading-5">
-              <div className="flex items-center gap-1 min-w-0 overflow-hidden text-[15px] truncate">
-                <span className="font-bold text-foreground hover:underline truncate">
-                  {displayData.authorName}
-                </span>
-                {displayData.verified && <VerifiedBadge className="text-[#1D9BF0] shrink-0" />}
-                <span className="text-muted-foreground text-sm truncate">
-                  @{displayData.authorHandle}
-                </span>
-                {displayData.timestamp && (
-                  <>
-                    <span className="text-muted-foreground text-sm">·</span>
-                    <span className="text-muted-foreground text-sm shrink-0">
-                      {timeAgo(displayData.timestamp)}
-                    </span>
-                  </>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                }}
-                className="text-muted-foreground hover:text-foreground p-1 -mr-1 rounded-full hover:bg-white/10 transition-colors"
-                aria-label="More options"
-              >
-                <Ellipsis className="size-4" />
-              </button>
+            <div className="flex items-center gap-1 leading-5 min-w-0 overflow-hidden text-[15px]">
+              <span className="font-bold text-foreground hover:underline truncate">
+                {displayData.authorName}
+              </span>
+              {displayData.verified && <VerifiedBadge className="text-[#1D9BF0] shrink-0" />}
+              <span className="text-muted-foreground text-sm truncate">@{displayData.authorHandle}</span>
+              {displayData.timestamp && (
+                <>
+                  <span className="text-muted-foreground text-sm">·</span>
+                  <span className="text-muted-foreground text-sm shrink-0">{timeAgo(displayData.timestamp)}</span>
+                </>
+              )}
             </div>
 
             {/* Content with rich highlights */}
@@ -471,39 +468,62 @@ export function TweetCard({
               </div>
             )}
 
-            {/* Quoted Tweet */}
-            {displayData.quotedTweet && (
+            {/* Quoted Tweet — X-style quote (Image 2) */}
+            {displayData.quotedTweet && (() => {
+              const q = displayData.quotedTweet as any
+              const qa = q.author as any
+              const qName = qa?.name || qa?.screenName || ''
+              const qHandle = qa?.screenName || ''
+              const qAvatar = qa?.profileImageUrl || qa?.profileImageURL
+              const qVerified = Boolean(qa?.verified)
+              const qTime = q.createdAtISO || q.createdAt || q.createdAtLocal
+              return (
               <div
-                className="mt-2.5 rounded-2xl border border-border/80 p-3 bg-muted/20 hover:bg-muted/30 transition-colors cursor-pointer"
+                className="mt-3 rounded-2xl border border-white/[0.12] overflow-hidden hover:bg-white/[0.03] transition-colors cursor-pointer"
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (!preview && displayData.quotedTweet?.author?.screenName && displayData.quotedTweet.id) {
-                    openExternalUrl(`https://x.com/${displayData.quotedTweet.author.screenName}/status/${displayData.quotedTweet.id}`)
+                  if (!preview && qHandle && q.id) {
+                    openExternalUrl(`https://x.com/${qHandle}/status/${q.id}`)
                   }
                 }}
               >
-                {displayData.quotedTweet.author && (
-                  <div className="flex items-center gap-1 text-[13px] mb-1">
-                    <span className="font-semibold text-foreground">
-                      {displayData.quotedTweet.author.name || displayData.quotedTweet.author.screenName}
-                    </span>
-                    <span className="text-muted-foreground">
-                      @{displayData.quotedTweet.author.screenName}
-                    </span>
+                <div className="p-3">
+                  {qHandle && (
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className="size-5 rounded-full overflow-hidden bg-zinc-800 flex-shrink-0">
+                        {qAvatar ? (
+                          <img src={qAvatar} alt={qName} className="size-full object-cover" />
+                        ) : (
+                          <div className="size-full flex items-center justify-center text-[10px] font-medium text-zinc-400">
+                            {qName?.[0] || qHandle[0] || '?'}
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-[13px] font-bold text-foreground truncate">{qName || qHandle}</span>
+                      {qVerified && <VerifiedBadge className="size-3.5 text-[#1D9BF0] shrink-0" />}
+                      <span className="text-[13px] text-zinc-500 truncate">@{qHandle}</span>
+                      {qTime && (
+                        <>
+                          <span className="text-zinc-500 text-[13px]">·</span>
+                          <span className="text-[13px] text-zinc-500 shrink-0">{timeAgo(qTime)}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-1.5 text-[14px] leading-[19px] text-foreground whitespace-pre-wrap break-words">
+                    {formatRichContent(q.text || '')}
                   </div>
-                )}
-                <p className="text-[13.5px] leading-snug text-foreground whitespace-pre-wrap">
-                  {formatRichContent(displayData.quotedTweet.text)}
-                </p>
+                </div>
               </div>
-            )}
+              )
+            })()}
 
-            {/* Action Bar (6 groups) */}
+            {/* Action Bar — full-width, bookmark+share grouped (Image 1) */}
             <div
-              className="mt-3 flex items-center justify-between max-w-[450px] text-muted-foreground text-[13px]"
+              className="mt-3 flex w-full items-center justify-between text-muted-foreground text-[13px]"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* 1. Reply */}
+              {/* Reply */}
               <button
                 type="button"
                 className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors -ml-1.5"
@@ -517,7 +537,7 @@ export function TweetCard({
                 )}
               </button>
 
-              {/* 2. Repost */}
+              {/* Repost */}
               <button
                 type="button"
                 onClick={displayData.onRetweet}
@@ -532,7 +552,7 @@ export function TweetCard({
                 )}
               </button>
 
-              {/* 3. Like */}
+              {/* Like */}
               <button
                 type="button"
                 onClick={displayData.onLike}
@@ -547,7 +567,7 @@ export function TweetCard({
                 )}
               </button>
 
-              {/* 4. Views */}
+              {/* Views */}
               <div className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors">
                 <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
                   <BarChart2 className="size-4" />
@@ -557,29 +577,29 @@ export function TweetCard({
                 )}
               </div>
 
-              {/* 5. Bookmark */}
-              <button
-                type="button"
-                onClick={displayData.onBookmark}
-                className="group flex items-center hover:text-[#1D9BF0] transition-colors"
-                aria-label="Bookmark"
-              >
-                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
-                  <Bookmark className="size-4" />
-                </div>
-              </button>
-
-              {/* 6. Share */}
-              <button
-                type="button"
-                onClick={displayData.onShare}
-                className="group flex items-center hover:text-[#1D9BF0] transition-colors"
-                aria-label="Share"
-              >
-                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
-                  <Share2 className="size-4" />
-                </div>
-              </button>
+              {/* Bookmark + Share grouped */}
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  onClick={displayData.onBookmark}
+                  className="group flex items-center hover:text-[#1D9BF0] transition-colors"
+                  aria-label="Bookmark"
+                >
+                  <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                    <Bookmark className="size-4" />
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={displayData.onShare}
+                  className="group flex items-center hover:text-[#1D9BF0] transition-colors -mr-1.5"
+                  aria-label="Share"
+                >
+                  <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                    <Share2 className="size-4" />
+                  </div>
+                </button>
+              </div>
             </div>
 
             {/* Replies List for feed variant */}
