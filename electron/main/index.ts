@@ -182,7 +182,27 @@ function createWindow() {
     logger.error('main', `renderer process exited: ${details.reason} (${details.exitCode})`)
   })
 
-  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+  // Electron 30+ deprecates the 5-arg signature: use Event<WebContentsConsoleMessageEventParams>
+  mainWindow.webContents.on('console-message' as any, (...args: any[]) => {
+    let level: number
+    let message: string
+    let line: number
+    let sourceId: string
+    if (args.length === 2 && args[1] && typeof args[1] === 'object' && 'message' in args[1]) {
+      const details = args[1] as any
+      level = details.level ?? 0
+      message = details.message ?? ''
+      line = details.lineNumber ?? details.line ?? 0
+      sourceId = details.sourceId ?? ''
+    } else if (args.length >= 5) {
+      // legacy: (event, level, message, line, sourceId)
+      level = args[1] as number
+      message = args[2] as string
+      line = args[3] as number
+      sourceId = args[4] as string
+    } else {
+      return
+    }
     const context = `${sourceId || 'renderer'}:${line}`
     if (level >= 2) logger.error('renderer', `${message} (${context})`)
     else logger.debug('renderer', `${message} (${context})`)
