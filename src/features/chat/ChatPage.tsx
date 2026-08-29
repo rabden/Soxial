@@ -847,8 +847,6 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       preparedAttachments.length > 0 ? JSON.stringify(preparedAttachments) : undefined,
     );
 
-    const summary = contextSummaryRef.current;
-    
     // Build API messages from the updated state messages
     const currentMsgs = [
       ...(sessionStates[sid]?.messages || []),
@@ -859,18 +857,10 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       role: m.role,
       content: m.content,
     }));
-    let apiMessages: (ApiMessage | { role: "system"; content: string })[];
-    if (summary) {
-      apiMessages = [
-        {
-          role: "system",
-          content: `Previous conversation summary: ${summary}`,
-        },
-        ...fullApiMessages.slice(-12),
-      ];
-    } else {
-      apiMessages = fullApiMessages;
-    }
+    // Context management (threshold checks, summarization, slicing) lives in
+    // the main-process agent runtime — the renderer always sends the full
+    // history (spec #53).
+    const apiMessages: ApiMessage[] = fullApiMessages;
 
     const unlistenChunk = window.api.onChatChunk((data: { text: string; sessionId: number }) => {
       if (data.sessionId !== sid) {
@@ -952,19 +942,15 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       });
     }
 
-    const prevContentLen = (sessionStates[sid]?.messages || []).reduce((sum: number, m: ChatMessage) => sum + m.content.length, 0);
-    const contextEstimate = prevContentLen + finalContent.length;
     if (userMsgCount > 0 && userMsgCount % 50 === 0) {
-      window.api.reTitle(sid, textOnlyMessages);
-    } else if (contextEstimate >= 150000) {
       window.api.reTitle(sid, textOnlyMessages);
     }
 
-    if (contextEstimate >= 100000 && !summary) {
-      window.api.generateSummary(sid, textOnlyMessages).then((r: any) => {
-        if (r.success) contextSummaryRef.current = r.summary;
-      });
-    }
+    // Compaction (if the agent runtime ran one) may have updated the session
+    // summary — refresh the badge source after the run settles.
+    void window.api.getSessionSummary(sid).then((s) => {
+      contextSummaryRef.current = s;
+    });
 
     // Clear refs AFTER reading values
     streamTextRefs.current[sid] = "";

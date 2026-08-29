@@ -418,6 +418,12 @@ function initSchema(db: Database.Database) {
   if (!sessionCols.some((c: any) => c.name === 'steps_user_count')) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN steps_user_count INTEGER DEFAULT 0')
   }
+  // Migration: context-token snapshot per session (spec #53). The last
+  // provider-reported context size grounds the pre-run compaction gate;
+  // NULL means "estimate from scratch".
+  if (!sessionCols.some((c: any) => c.name === 'context_tokens')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN context_tokens INTEGER')
+  }
 
   // Migration: add zai_coding_plan column to user_profile table if missing
   if (!profileCols.some((c: any) => c.name === 'zai_coding_plan')) {
@@ -721,6 +727,15 @@ export function updateChatSessionTitle(id: number, title: string) {
 export function getChatSessionContextSummary(sessionId: number): string | null {
   const row = getDb().prepare('SELECT context_summary FROM chat_sessions WHERE id = ?').get(sessionId) as any
   return row?.context_summary || null
+}
+
+export function getChatSessionContextTokens(sessionId: number): number | null {
+  const row = getDb().prepare('SELECT context_tokens FROM chat_sessions WHERE id = ?').get(sessionId) as any
+  return typeof row?.context_tokens === 'number' ? row.context_tokens : null
+}
+
+export function updateChatSessionContextTokens(sessionId: number, tokens: number) {
+  getDb().prepare('UPDATE chat_sessions SET context_tokens = ?, updated_at = datetime(\'now\') WHERE id = ?').run(tokens, sessionId)
 }
 
 export function updateChatSessionContextSummary(sessionId: number, summary: string) {

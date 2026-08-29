@@ -101,7 +101,7 @@ const api = {
   updateSessionTitle: (sessionId: number, title: string) => ipcRenderer.invoke('chat:updateTitle', sessionId, title),
   deleteSession: (sessionId: number) => ipcRenderer.invoke('chat:deleteSession', sessionId),
   generateTitle: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:generateTitle', sessionId, messages),
-  generateSummary: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:generateSummary', sessionId, messages),
+
   getSessionSummary: (sessionId: number) => ipcRenderer.invoke('chat:getSessionSummary', sessionId),
   reTitle: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:reTitle', sessionId, messages),
   generateQuickActions: () => ipcRenderer.invoke('chat:generateQuickActions'),
