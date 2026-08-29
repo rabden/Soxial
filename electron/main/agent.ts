@@ -984,6 +984,8 @@ export interface RunAgentRequest {
   onToolResult?: (name: string, result: any) => void
   onReasoning?: (text: string) => void
   onTransientRetry?: (info: { attempt: number; maxAttempts: number; backoffMs: number; model: string }) => void
+  /** Live context size per completed sampling step (usage ground truth). */
+  onContextTokens?: (tokens: number, model: string) => void
   options?: AgentOptions
   toolsOverride?: Record<string, any>
   systemPromptOverride?: string
@@ -1004,6 +1006,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     onToolResult = () => {},
     onReasoning,
     onTransientRetry,
+    onContextTokens,
     options,
     toolsOverride,
     systemPromptOverride,
@@ -1370,6 +1373,17 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
                   : outputForUi
                 onToolResult(part.toolName, truncated)
                 logger.info('agent', `tool-result: ${part.toolName}`)
+                break
+              }
+              case 'step-finish': {
+                // Live context size (spec #53 follow-up): each sampling step's
+                // usage is ground truth for the full request size at that
+                // moment — feeds the renderer's context ring mid-turn.
+                const usage: any = (part as any).usage
+                const input = usage?.inputTokens
+                if (onContextTokens && Number.isFinite(input) && input > 0) {
+                  onContextTokens(input + (Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0), currentModel)
+                }
                 break
               }
               case 'error':

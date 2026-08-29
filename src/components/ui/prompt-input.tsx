@@ -1010,29 +1010,40 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
               </div>
             </div>
 
-            {/* Context gauge (ticket #59): progress toward the flat 180k
-                compaction line, fed from the agent runtime's per-session
-                token snapshot. */}
-            {contextState && contextState.compactsAtTokens > 0 && (
-              <span
-                data-testid="context-gauge"
-                title={`~${Math.round(contextState.usedTokens / 1000)}k of the ${Math.round(contextState.compactsAtTokens / 1000)}k compaction line${contextState.compacted ? " · compacted history" : ""}`}
-                className="flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium text-foreground/40"
-              >
+            {/* Context ring (ticket #59 + follow-up): circular progress toward
+                the flat 180k compaction line, fed live from per-step usage
+                ground truth. Sits beside the attach button. */}
+            {contextState && contextState.compactsAtTokens > 0 && (() => {
+              const ratio = Math.min(1, contextState.usedTokens / contextState.compactsAtTokens);
+              const ringColor =
+                ratio >= 0.85 ? "stroke-red-400/80" : ratio >= 0.7 ? "stroke-amber-400/80" : "stroke-foreground/30";
+              const circumference = 2 * Math.PI * 7.5;
+              return (
                 <span
-                  data-testid="context-gauge-dot"
-                  className={cn(
-                    "size-1.5 rounded-full",
-                    contextState.usedTokens / contextState.compactsAtTokens >= 0.85
-                      ? "bg-red-400/80"
-                      : contextState.usedTokens / contextState.compactsAtTokens >= 0.7
-                        ? "bg-amber-400/80"
-                        : "bg-foreground/30",
-                  )}
-                />
-                {Math.min(999, Math.round((contextState.usedTokens / contextState.compactsAtTokens) * 100))}%
-              </span>
-            )}
+                  data-testid="context-gauge"
+                  title={`~${Math.round(contextState.usedTokens / 1000)}k of the ${Math.round(contextState.compactsAtTokens / 1000)}k compaction line${contextState.compacted ? " · compacted history" : ""}`}
+                  className="ml-auto mr-1 flex size-[22px] items-center justify-center"
+                >
+                  <svg viewBox="0 0 18 18" className="absolute size-[22px]" aria-hidden="true">
+                    <circle cx="9" cy="9" r="7.5" fill="none" strokeWidth="1.6" className="stroke-white/10" />
+                    <circle
+                      data-testid="context-gauge-ring"
+                      cx="9" cy="9" r="7.5" fill="none" strokeWidth="1.6" strokeLinecap="round"
+                      strokeDasharray={circumference}
+                      strokeDashoffset={circumference * (1 - ratio)}
+                      transform="rotate(-90 9 9)"
+                      className={cn("transition-[stroke-dashoffset,stroke] duration-500", ringColor)}
+                    />
+                  </svg>
+                  <span
+                    data-testid="context-gauge-percent"
+                    className="relative text-[8px] font-semibold tabular-nums text-foreground/45 leading-none"
+                  >
+                    {Math.min(100, Math.round(ratio * 100))}
+                  </span>
+                </span>
+              );
+            })()}
 
             {/* Effort toggle - only for models that support it */}
             {showEffort && (
@@ -1055,7 +1066,10 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => fileInputRef.current?.click()}
               disabled={attachments.length >= 6}
-              className="ml-auto flex size-7 items-center justify-center rounded-full text-foreground/50 transition-all hover:bg-accent/60 hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
+              className={cn(
+                "flex size-7 items-center justify-center rounded-full text-foreground/50 transition-all hover:bg-accent/60 hover:text-foreground disabled:opacity-40 disabled:pointer-events-none",
+                !contextState && "ml-auto",
+              )}
             >
               <PlusIcon />
             </button>

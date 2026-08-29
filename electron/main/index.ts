@@ -1431,6 +1431,7 @@ function setupIpc() {
           },
           onReasoning: text => mainWindow?.webContents.send('chat:reasoning', { text, sessionId: sid }),
           onTransientRetry: info => mainWindow?.webContents.send('chat:transientRetry', { ...info, sessionId: sid }),
+          onContextTokens: (tokens, model) => mainWindow?.webContents.send('chat:contextTokens', { sessionId: sid, tokens, model, compactsAtTokens: compactionThresholdTokens() }),
           options: {
             ...options,
           },

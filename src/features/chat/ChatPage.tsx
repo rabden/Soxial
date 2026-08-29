@@ -428,6 +428,16 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
 
   useEffect(() => {
     const cleanup: Array<() => void> = [];
+    // Live context ring (#54 follow-up): per-step usage ground truth from the
+    // agent runtime, so the ring moves DURING a long agentic turn.
+    cleanup.push(window.api.onChatContextTokens((data: { sessionId: number; tokens: number; compactsAtTokens: number }) => {
+      if (data.sessionId !== currentSessionIdRef.current) return;
+      setContextState(prev => ({
+        usedTokens: data.tokens,
+        compactsAtTokens: data.compactsAtTokens,
+        compacted: prev?.compacted ?? false,
+      }));
+    }));
     cleanup.push(window.api.onChatToolCall((data: { name: string; args: any; sessionId: number }) => {
       const sid = data.sessionId;
       setSessionStates((prev) => {

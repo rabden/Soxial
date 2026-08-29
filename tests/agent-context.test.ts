@@ -62,6 +62,7 @@ function okStreamResult(opts: { text?: string; responseMessages?: any[]; usage?:
   return {
     stream: (async function* () {
       yield { type: 'text-delta', text }
+      yield { type: 'step-finish', usage: opts.usage ?? {} }
     })(),
     responseMessages: Promise.resolve(opts.responseMessages ?? []),
     steps: Promise.resolve(opts.usage ? [{ usage: opts.usage }] : []),
@@ -178,6 +179,15 @@ describe('runAgent context gate', () => {
     )
     await runAgent(baseRun())
     expect(mocks.db.updateChatSessionContextTokens).toHaveBeenCalledWith(1, 5_500)
+  })
+
+  it('emits live context tokens per sampling step mid-turn', async () => {
+    const onContextTokens = vi.fn()
+    mocks.streamText.mockImplementation(() =>
+      okStreamResult({ usage: { inputTokens: 42_000, outputTokens: 2_000 } }),
+    )
+    await runAgent(baseRun({ onContextTokens }))
+    expect(onContextTokens).toHaveBeenCalledWith(44_000, 'test-model-a')
   })
 
   it('compacts once and resubmits on a classified context-overflow error', async () => {
