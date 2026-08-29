@@ -1,7 +1,27 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parseTweetData, timeAgo, TweetCard } from '../src/components/ui/tweet-card'
+import { extractTweetAttachments } from '../src/components/ui/post-attachment'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+
+describe('extractTweetAttachments — media beats link card', () => {
+  it('drops the og link preview when the tweet has native media', () => {
+    const atts = extractTweetAttachments({
+      media: [{ type: 'photo', url: 'https://pbs.twimg.com/media/pic.jpg' }],
+      urls: ['https://example.com/blog-post'],
+    })
+    expect(atts).toHaveLength(1)
+    expect(atts[0].type).toBe('image')
+    expect(atts[0].url).toBe('https://pbs.twimg.com/media/pic.jpg')
+  })
+
+  it('keeps the og link preview when the tweet has no native media', () => {
+    const atts = extractTweetAttachments({ urls: ['https://example.com/blog-post'] })
+    expect(atts).toHaveLength(1)
+    expect(atts[0].type).toBe('link')
+    expect(atts[0].url).toBe('https://example.com/blog-post')
+  })
+})
 
 describe('TweetCard fidelity and feed variant', () => {
   describe('parseTweetData', () => {
@@ -175,11 +195,12 @@ describe('TweetCard fidelity and feed variant', () => {
         })
       )
 
-      // Feed container styling
+      // Feed container styling — deliberately NOT click-through: opening
+      // x.com only happens through explicit affordances.
       expect(html).toContain('border-b')
       expect(html).toContain('border-border/60')
       expect(html).toContain('hover:bg-white/[0.02]')
-      expect(html).toContain('cursor-pointer')
+      expect(html).not.toContain('cursor-pointer')
 
       // Repost header attribution
       expect(html).toContain('Vitalik reposted')
@@ -197,10 +218,11 @@ describe('TweetCard fidelity and feed variant', () => {
       expect(html).toContain('#awesome')
       expect(html).toContain('@openai')
 
-      // Quoted tweet box
+      // Quoted tweet box — text clamps at 4 lines, never a Show-more button
       expect(html).toContain('Original quoted post')
       expect(html).toContain('Sam Altman')
       expect(html).toContain('@sama')
+      expect(html).toContain('line-clamp-4')
 
       // Action bar (6 groups with icons and hover pill classes)
       expect(html).toContain('aria-label="Reply"')
@@ -224,8 +246,7 @@ describe('TweetCard fidelity and feed variant', () => {
       expect(html).toContain('32k') // Views formatted
     })
 
-    it('shows the quote media/link preview only when the quoting tweet has none of its own', () => {
-      const quoteWithMedia = {
+    it('shows the quote media/link preview only when the quoting tweet has none of its own', () => {      const quoteWithMedia = {
         id: '112233',
         text: 'Original quoted post',
         author: { screenName: 'sama', name: 'Sam Altman' },

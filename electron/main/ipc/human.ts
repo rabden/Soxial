@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron'
+import { logger } from '../log'
 import {
   clampGrowthCount,
   clampHumanCount,
@@ -16,11 +17,13 @@ import {
 } from '../human-connector'
 import { normalizeTwitterHandle } from '../twitter-handle'
 import { isTwitterHandleRebuildActive } from '../twitter-handle-rebuild'
+import { draftHumanReply } from '../human-ai'
 // Request shapes live in one place: the renderer contract module.
 import type {
   HumanFeedRequest,
   HumanFollowListRequest,
   HumanProfilePostsRequest,
+  HumanReplyDraftRequest,
   HumanSearchRequest,
 } from '../../../src/features/human/types'
 
@@ -147,7 +150,18 @@ export function registerHumanHandlers(): void {
 
     const res = await runHumanTwitterCli(args)
     if (!res.ok) return { ok: false as const, error: mapCliError(res) }
-    return { ok: true as const, data: toHumanPage(res) }
+    const page = toHumanPage(res)
+    // Capability tripwire: a full page with no continuation cursor means the
+    // connector lost feed-cursor support (e.g. a PyPI reinstall of 0.8.5
+    // without patch layer K). The feed would otherwise silently dead-end at
+    // one page ("You're all caught up") — log it so the cause is findable.
+    if (!page.nextCursor && page.items.length >= clampHumanCount(request.count)) {
+      logger.warn(
+        'human-connector',
+        'feed page came back full without a continuation cursor — connector missing feed-cursor capability (is scripts/patch-twitter-cli.cjs layer K applied?)',
+      )
+    }
+    return { ok: true as const, data: page }
   })
 
   ipcMain.handle('human:verifySession', async () => {
@@ -305,6 +319,59 @@ export function registerHumanHandlers(): void {
     return { ok: true as const, data: { tweetId, action } }
   })
 
+  // ——— Reply (Human comment modal) ———
+  ipcMain.handle(
+    'human:reply',
+    async (_event, request: { tweetId?: string; text?: string; imagePaths?: string[] }) => {
+      const session = await verifyHumanSession()
+      if (!session.ok) return authError(session)
+
+      // Writes are blocked while a handle rebuild is active (owns the reply
+      // identity, mirrors human:followAction).
+      if (isTwitterHandleRebuildActive()) {
+        return {
+          ok: false as const,
+          error: mapCliError({
+            error: 'Profile rebuild in progress — replies resume when it finishes.',
+            errorCode: 'invalid_input',
+          }),
+        }
+      }
+
+      const tweetId = String(request?.tweetId ?? '').trim()
+      if (!/^\d+$/.test(tweetId)) return { ok: false as const, error: invalidError('Invalid tweet ID') }
+      const text = String(request?.text ?? '').trim()
+      if (!text) return { ok: false as const, error: invalidError('Reply text is required.') }
+      // X allows 280 for standard, 25,000 for Premium/verified — enforce the
+      // upper bound; the renderer already gates at 280 vs 25k based on verified.
+      if (text.length > 25_000) return { ok: false as const, error: invalidError('Reply exceeds 25,000 characters.') }
+
+      // Up to 4 images, flag-safety on paths (the CLI parses `-i` values).
+      const imagePaths = Array.isArray(request?.imagePaths)
+        ? request.imagePaths.filter((p): p is string => typeof p === 'string' && p.length > 0).slice(0, 4)
+        : []
+      if (imagePaths.some((p) => p.startsWith('-'))) {
+        return { ok: false as const, error: invalidError('Invalid image path.') }
+      }
+
+      const args = ['reply', tweetId, text, '--json']
+      for (const image of imagePaths) args.push('-i', image)
+
+      const res = await runHumanTwitterCli(args)
+      if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+      // The connector emits {ok, data:{success, action, id, replyTo, url}}.
+      const payload = (res.data && typeof res.data === 'object' ? res.data : {}) as Record<string, unknown>
+      return {
+        ok: true as const,
+        data: {
+          tweetId: typeof payload.id === 'string' || typeof payload.id === 'number' ? String(payload.id) : '',
+          replyTo: tweetId,
+          url: typeof payload.url === 'string' ? payload.url : undefined,
+        },
+      }
+    },
+  )
+
   ipcMain.handle('human:search', async (_event, request: HumanSearchRequest) => {
     const session = await verifyHumanSession()
     if (!session.ok) return authError(session)
@@ -320,4 +387,11 @@ export function registerHumanHandlers(): void {
       data: toWindowedHumanPage(res, clampHumanCount(request.count)),
     }
   })
+
+  // ——— One-shot AI reply draft (Human composer) ———
+  // Read-only + generation only: no session gate, no rebuild lock — it can
+  // never post, like, or mutate anything. Posting stays on human:reply.
+  ipcMain.handle('human:replyDraft', async (_event, request: HumanReplyDraftRequest) =>
+    draftHumanReply(request ?? ({ tweetId: '' } as HumanReplyDraftRequest)),
+  )
 }

@@ -1,9 +1,53 @@
-import { app, ipcMain } from 'electron'
-import { readFileSync } from 'fs'
-import { basename, join } from 'path'
+import { app, dialog, ipcMain } from 'electron'
+import { readFileSync, statSync } from 'fs'
+import { basename, extname, join } from 'path'
 import { errorForRenderer } from '../errors'
 
+/** Images the X connector accepts (twitter-cli upload_media gate). */
+const REPLY_IMAGE_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+const REPLY_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+
 export function registerMediaHandlers(): void {
+  // Native multi-select picker for reply attachments — resolves absolute
+  // paths in main (renderer File objects lost their paths across the
+  // contextBridge, so webUtils.getPathForFile was unreliable here).
+  ipcMain.handle('dialog:pickImages', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Add images',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }],
+    })
+    if (result.canceled) return { ok: true as const, paths: [] }
+    return { ok: true as const, paths: result.filePaths.slice(0, 4) }
+  })
+
+  // Read a picked image as a data URL for <img> previews (renderer cannot
+  // load arbitrary local paths). Enforces the connector's image gates.
+  ipcMain.handle('media:dataUrl', (_event, filePath: string) => {
+    const mime = REPLY_IMAGE_MIME[extname(filePath).toLowerCase()]
+    if (!mime) {
+      const appError = errorForRenderer('Only jpg, png, gif or webp images are supported')
+      return { success: false as const, error: appError.message }
+    }
+    try {
+      if (statSync(filePath).size > REPLY_IMAGE_MAX_BYTES) {
+        const appError = errorForRenderer('Images must be 5 MB or smaller')
+        return { success: false as const, error: appError.message }
+      }
+      const data = readFileSync(filePath)
+      return { success: true as const, dataUrl: `data:${mime};base64,${data.toString('base64')}` }
+    } catch {
+      const appError = errorForRenderer('Image could not be read')
+      return { success: false as const, error: appError.message }
+    }
+  })
+
   ipcMain.handle('get:media', (_event, filename: string) => {
     if (basename(filename) !== filename) {
       const appError = errorForRenderer('Invalid filename')

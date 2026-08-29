@@ -225,10 +225,18 @@ app.whenReady().then(() => {
 
   // ponytail: Twitter video CDN 403s requests with non-Twitter Referer.
   // Custom protocol proxies through Node.js fetch (no Referer restriction).
-  // Wrap twimg fetch in try/catch and AbortSignal.timeout to prevent ETIMEDOUT on slow media
+  // The abort ceiling applies to time-to-first-byte ONLY: b72eed3 used
+  // AbortSignal.timeout(8000), which in undici's fetch governs the whole
+  // transfer — multi-MB mp4s regularly exceed 8s mid-stream, so the signal
+  // severed the body while Chromium was consuming it and every such video
+  // surfaced as "Video failed to load" (a reload usually rode a faster path
+  // and worked). Headers must land inside 15s; the body itself streams
+  // without a deadline.
   protocol.handle('twimg', async (request) => {
     const actualUrl = request.url.replace(/^twimg:\/\//, 'https://')
     const range = request.headers.get('range')
+    const controller = new AbortController()
+    const ttfbTimer = setTimeout(() => controller.abort(), 15_000)
     try {
       const res = await fetch(actualUrl, {
         headers: {
@@ -236,8 +244,13 @@ app.whenReady().then(() => {
           'Origin': 'https://x.com',
           ...(range ? { Range: range } : {}),
         },
-        signal: AbortSignal.timeout(8000), // 8-second ceiling
+        redirect: 'follow',
+        signal: controller.signal,
       })
+      clearTimeout(ttfbTimer)
+      if (res.status >= 400) {
+        logger.warn('main', `twimg proxy: upstream ${res.status} for ${actualUrl.slice(0, 140)}`)
+      }
       const headers = new Headers()
       for (const name of ['accept-ranges', 'content-length', 'content-range', 'content-type']) {
         const value = res.headers.get(name)
@@ -246,7 +259,9 @@ app.whenReady().then(() => {
       if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream')
       headers.set('Access-Control-Allow-Origin', '*')
       return new Response(res.body, { status: res.status, headers })
-    } catch {
+    } catch (err) {
+      clearTimeout(ttfbTimer)
+      logger.warn('main', `twimg proxy failed for ${actualUrl.slice(0, 140)}: ${err instanceof Error ? err.message : String(err)}`)
       return new Response(null, { status: 504 })
     }
   })

@@ -14,6 +14,11 @@ vi.mock('../electron/main/cli', () => ({
   ensureTwitterAuth: vi.fn(),
 }))
 
+const rebuildActive = vi.fn(() => false)
+vi.mock('../electron/main/twitter-handle-rebuild', () => ({
+  isTwitterHandleRebuildActive: () => rebuildActive(),
+}))
+
 import { ipcMain } from 'electron'
 import { runTwitterCli, ensureTwitterAuth, type CliResult } from '../electron/main/cli'
 import { normalizeHumanUser, sanitizeIsoDate, toWindowedHumanPage } from '../electron/main/human-connector'
@@ -224,5 +229,80 @@ describe('human:profilePosts handler — connector seam', () => {
     const result = await handlers['human:profilePosts']({}, { subTab: 'posts' })
     expect(result.ok).toBe(false)
     expect(result.error.category).toBe('rate-limit')
+  })
+})
+
+describe('human:reply handler — connector seam', () => {
+  it('builds reply args: reply <id> <text> --json with images', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    vi.mocked(runTwitterCli).mockResolvedValue({
+      ok: true,
+      data: { success: true, action: 'reply', id: '999', replyTo: '123', url: 'https://x.com/i/status/999' },
+    } as CliResult)
+
+    const result = await handlers['human:reply']({}, {
+      tweetId: '123',
+      text: 'my reply',
+      imagePaths: ['/tmp/a.png', '/tmp/b.png'],
+    })
+
+    expect(runTwitterCli).toHaveBeenCalledWith(
+      ['reply', '123', 'my reply', '--json', '-i', '/tmp/a.png', '-i', '/tmp/b.png'],
+      { compact: false, timeoutMs: 30_000 },
+    )
+    expect(result).toEqual({
+      ok: true,
+      data: { tweetId: '999', replyTo: '123', url: 'https://x.com/i/status/999' },
+    })
+  })
+
+  it('validates tweet id, text length and image paths before invoking the CLI', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    vi.mocked(runTwitterCli).mockResolvedValue({ ok: true, data: null } as CliResult)
+
+    const badId = await handlers['human:reply']({}, { tweetId: 'abc', text: 'hi' })
+    expect(badId.ok).toBe(false)
+    expect(badId.error.category).toBe('validation')
+
+    const emptyText = await handlers['human:reply']({}, { tweetId: '123', text: '   ' })
+    expect(emptyText.ok).toBe(false)
+    expect(emptyText.error.category).toBe('validation')
+
+    const longText = await handlers['human:reply']({}, { tweetId: '123', text: 'x'.repeat(25_001) })
+    expect(longText.ok).toBe(false)
+
+    const flagPath = await handlers['human:reply']({}, { tweetId: '123', text: 'hi', imagePaths: ['-rf'] })
+    expect(flagPath.ok).toBe(false)
+    expect(runTwitterCli).not.toHaveBeenCalled()
+  })
+
+  it('gates on session and the rebuild lock before writing', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(
+      { ok: false, data: null, error: 'no cookies', errorCode: 'not_authenticated' } as CliResult,
+    )
+    const noSession = await handlers['human:reply']({}, { tweetId: '123', text: 'hi' })
+    expect(noSession.ok).toBe(false)
+    expect(noSession.error.category).toBe('auth')
+
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    rebuildActive.mockReturnValue(true)
+    const locked = await handlers['human:reply']({}, { tweetId: '123', text: 'hi' })
+    expect(locked.ok).toBe(false)
+    expect(runTwitterCli).not.toHaveBeenCalled()
+    rebuildActive.mockReturnValue(false)
+  })
+
+  it('maps connector errors through the typed model', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    vi.mocked(runTwitterCli).mockResolvedValue({
+      ok: false,
+      data: null,
+      error: 'You attempted to reply to a Tweet that is deleted',
+      errorCode: 'api_error',
+    } as CliResult)
+
+    const result = await handlers['human:reply']({}, { tweetId: '123', text: 'hi' })
+    expect(result.ok).toBe(false)
+    expect(result.error.category).toBe('internal')
   })
 })

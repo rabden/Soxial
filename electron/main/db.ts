@@ -6,7 +6,15 @@ import { seedDatabase } from './seed'
 import { logger } from './log'
 import { credentialFingerprint, deleteCredential, getCredential, saveCredential } from './credentials'
 import { runMigrations } from './db-migrations'
-import { normalizeModelId, parseModelRef, customModelId, OPENAI_MODEL_CATALOG, ANTHROPIC_MODEL_CATALOG } from './models'
+import {
+  normalizeModelId,
+  parseModelRef,
+  customModelId,
+  GOOGLE_MODEL_CATALOG,
+  ZHIPU_MODEL_CATALOG,
+  OPENAI_MODEL_CATALOG,
+  ANTHROPIC_MODEL_CATALOG,
+} from './models'
 
 let db: Database.Database | null = null
 
@@ -989,24 +997,18 @@ export function countSocialContent(options?: { platform?: string; content_type?:
 export function getAvailableModels(): string[] {
   const db = getDb()
   const models: string[] = []
-  const profile = getProfile()
 
   // 1. Google models (full catalog — no tier gating; exhaustion cooldowns are
   // handled at attempt time).
   const googleKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'google\' AND is_active = 1').get() as any
   if (googleKeys.count > 0) {
-    models.push('gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite')
+    for (const m of GOOGLE_MODEL_CATALOG) models.push(m.id)
   }
 
-  // 2. Z.AI (Zhipu) models
+  // 2. Z.AI (Zhipu) models — full catalog, no coding-plan split (historical separation removed).
   const zhipuKeys = db.prepare('SELECT COUNT(*) as count FROM api_keys WHERE provider = \'zhipu\' AND is_active = 1').get() as any
   if (zhipuKeys.count > 0) {
-    if (profile?.zai_coding_plan) {
-      // Coding plan endpoints only serve the coding models.
-      models.push('glm-5.3', 'glm-5-turbo')
-    } else {
-      models.push('glm-5.3', 'glm-5-turbo', 'glm-4.7-flash', 'glm-4.5-flash')
-    }
+    for (const m of ZHIPU_MODEL_CATALOG) models.push(m.id)
   }
 
   // 3. Evaluate OpenAI / Anthropic / user-defined OpenAI-compatible endpoints.
@@ -1028,7 +1030,9 @@ export function getAvailableModels(): string[] {
 export function getDefaultModel(): string {
   const models = getAvailableModels()
   if (models.includes('gemini-3.7-flash')) return 'gemini-3.7-flash'
-  if (models.includes('glm-4.7-flash')) return 'glm-4.7-flash'
+  if (models.includes('glm-5.3-flash')) return 'glm-5.3-flash'
+  if (models.includes('openai/gpt-5.6-luna')) return 'openai/gpt-5.6-luna'
+  if (models.includes('anthropic/claude-sonnet-5')) return 'anthropic/claude-sonnet-5'
   return models[0] || 'gemini-3.5-flash-lite'
 }
 

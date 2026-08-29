@@ -44,6 +44,14 @@
  *   J. `serialization.py` quotedTweet dict gains media + urls (+ ISO time) so
  *      the UI can show the quote's own media/og preview when the quoting
  *      tweet has no attachment of its own (X behavior).
+ *   K. Feed cursor pagination backport (upstream #56, never released to
+ *      PyPI — latest is 0.8.5): `client.py` `_fetch_timeline`/
+ *      `fetch_home_timeline`/`fetch_following_feed` gain `start_cursor`/
+ *      `return_cursor` plumbing and `cli.py`'s `feed` command gains
+ *      `--cursor` plus `pagination.nextCursor` on the structured envelope.
+ *      Without K the Human feed ends after one page ("You're all caught
+ *      up") and every reload re-serves X's CDN-cached launch page head.
+ *      Skips itself when upstream ships the feature natively.
  *
  * Usage: node scripts/patch-twitter-cli.cjs [--check]
  *   --check  exit 1 if the patch is not currently applied (CI guard)
@@ -64,6 +72,7 @@ const MARKER_USERTWEETS = '# SOXIAL-PATCH: user-tweets-path v1'
 const MARKER_PIN = 'SOXIAL-PATCH: pin-entry v1'
 const MARKER_VIEWER = 'SOXIAL-PATCH: viewer-state v1'
 const MARKER_QUOTE = 'SOXIAL-PATCH: quote-media v1'
+const MARKER_FEED_CURSOR = 'SOXIAL-PATCH: feed-cursor v1'
 
 /** Resolve the installed twitter-cli's client.py inside its uv tool venv. */
 function resolveClientPy(explicit) {
@@ -297,6 +306,8 @@ const SERIALIZATION_VIEWER_NEW = [
 
 // J: quote media — the quoted tweet's dict gains media + urls (+ ISO time) so
 // the UI can render the quote's own preview when the quoting tweet has none.
+// v1 emitted only screenName/name; v2 adds avatar + verified so the quote header
+// can render correctly (author image + blue check).
 const SERIALIZATION_QUOTE_OLD = [
   '    if tweet.quoted_tweet:',
   '        data["quotedTweet"] = {',
@@ -316,6 +327,8 @@ const SERIALIZATION_QUOTE_NEW = [
   '            "author": {',
   '                "screenName": tweet.quoted_tweet.author.screen_name,',
   '                "name": tweet.quoted_tweet.author.name,',
+  '                "profileImageUrl": tweet.quoted_tweet.author.profile_image_url,',
+  '                "verified": tweet.quoted_tweet.author.verified,',
   '            },',
   `            # ${MARKER_QUOTE} — media + links so the quote can show its own`,
   '            # preview when the quoting tweet has none of its own.',
@@ -331,6 +344,189 @@ const SERIALIZATION_QUOTE_NEW = [
   '            ],',
   '            "urls": list(tweet.quoted_tweet.urls),',
   '        }',
+].join('\n')
+
+// J2: upgrade already-patched quote-media (v1 without author avatar/verified) to v2
+const SERIALIZATION_QUOTE_V1_OLD = [
+  '            "author": {',
+  '                "screenName": tweet.quoted_tweet.author.screen_name,',
+  '                "name": tweet.quoted_tweet.author.name,',
+  '            },',
+  `            # ${MARKER_QUOTE} — media + links so the quote can show its own`,
+].join('\n')
+const SERIALIZATION_QUOTE_V1_NEW = [
+  '            "author": {',
+  '                "screenName": tweet.quoted_tweet.author.screen_name,',
+  '                "name": tweet.quoted_tweet.author.name,',
+  '                "profileImageUrl": tweet.quoted_tweet.author.profile_image_url,',
+  '                "verified": tweet.quoted_tweet.author.verified,',
+  '            },',
+  `            # ${MARKER_QUOTE} — media + links so the quote can show its own`,
+].join('\n')
+
+// K: feed cursor pagination — backport of upstream #56 ("Add list cursor
+// pagination"), which PyPI never released (latest 0.8.5 predates it). The app's
+// Human feed contract (plans/twitter-cli-contract.md §2) requires `--cursor`
+// in and `pagination.nextCursor` out; without it the feed dead-ends after one
+// page and every reload re-serves the CDN-cached launch-page head.
+// client.py side: start_cursor/return_cursor plumbing through _fetch_timeline.
+const CLIENT_HOME_OLD = [
+  '    def fetch_home_timeline(self, count=20):',
+  '        # type: (int) -> List[Tweet]',
+  '        """Fetch home timeline tweets."""',
+  '        return self._fetch_timeline(',
+  '            "HomeTimeline",',
+  '            count,',
+  '            lambda data: _deep_get(data, "data", "home", "home_timeline_urt", "instructions"),',
+  '        )',
+  '',
+  '    def fetch_following_feed(self, count=20):',
+  '        # type: (int) -> List[Tweet]',
+  '        """Fetch chronological following feed."""',
+  '        return self._fetch_timeline(',
+  '            "HomeLatestTimeline",',
+  '            count,',
+  '            lambda data: _deep_get(data, "data", "home", "home_timeline_urt", "instructions"),',
+  '        )',
+].join('\n')
+const CLIENT_HOME_NEW = [
+  `    def fetch_home_timeline(self, count=20, cursor=None, return_cursor=False):  # ${MARKER_FEED_CURSOR}`,
+  '        # type: (int, Optional[str], bool) -> Any',
+  '        """Fetch home timeline tweets."""',
+  '        return self._fetch_timeline(',
+  '            "HomeTimeline",',
+  '            count,',
+  '            lambda data: _deep_get(data, "data", "home", "home_timeline_urt", "instructions"),',
+  '            start_cursor=cursor,',
+  '            return_cursor=return_cursor,',
+  '        )',
+  '',
+  `    def fetch_following_feed(self, count=20, cursor=None, return_cursor=False):  # ${MARKER_FEED_CURSOR}`,
+  '        # type: (int, Optional[str], bool) -> Any',
+  '        """Fetch chronological following feed."""',
+  '        return self._fetch_timeline(',
+  '            "HomeLatestTimeline",',
+  '            count,',
+  '            lambda data: _deep_get(data, "data", "home", "home_timeline_urt", "instructions"),',
+  '            start_cursor=cursor,',
+  '            return_cursor=return_cursor,',
+  '        )',
+].join('\n')
+
+const CLIENT_FETCHSIG_OLD = [
+  '    def _fetch_timeline(self, operation_name, count, get_instructions, extra_variables=None, override_base_variables=False, field_toggles=None):',
+  '        # type: (str, int, Callable[[Any], Any], Optional[Dict[str, Any]], bool, Optional[Dict[str, Any]]) -> List[Tweet]',
+].join('\n')
+const CLIENT_FETCHSIG_NEW = [
+  `    def _fetch_timeline(self, operation_name, count, get_instructions, extra_variables=None, override_base_variables=False, field_toggles=None, start_cursor=None, return_cursor=False):  # ${MARKER_FEED_CURSOR}`,
+  '        # type: (str, int, Callable[[Any], Any], Optional[Dict[str, Any]], bool, Optional[Dict[str, Any]], Optional[str], bool) -> Any',
+].join('\n')
+
+const CLIENT_CURSOR_INIT_OLD = [
+  '        tweets = []  # type: List[Tweet]',
+  '        seen_ids = set()  # type: Set[str]',
+  '        cursor = None  # type: Optional[str]',
+  '        attempts = 0',
+  '        max_attempts = int(math.ceil(count / 20.0)) + 2',
+  '',
+  '        while len(tweets) < count and attempts < max_attempts:',
+].join('\n')
+const CLIENT_CURSOR_INIT_NEW = [
+  '        tweets = []  # type: List[Tweet]',
+  '        seen_ids = set()  # type: Set[str]',
+  `        cursor = start_cursor  # type: Optional[str]  # ${MARKER_FEED_CURSOR}`,
+  '        continuation_cursor = None  # type: Optional[str]',
+  '        attempts = 0',
+  '        max_attempts = int(math.ceil(count / 20.0)) + 2',
+  '',
+  '        while len(tweets) < count and attempts < max_attempts:',
+].join('\n')
+
+const CLIENT_BREAKS_OLD = [
+  '            if not next_cursor:',
+  '                break',
+  '            if next_cursor == cursor:',
+  '                logger.debug("Timeline pagination stopped because cursor did not advance: %s", next_cursor)',
+  '                break',
+  '            cursor = next_cursor',
+].join('\n')
+const CLIENT_BREAKS_NEW = [
+  '            if not next_cursor:',
+  `                continuation_cursor = None  # ${MARKER_FEED_CURSOR}`,
+  '                break',
+  '            if next_cursor == cursor:',
+  '                logger.debug("Timeline pagination stopped because cursor did not advance: %s", next_cursor)',
+  `                continuation_cursor = None  # ${MARKER_FEED_CURSOR}`,
+  '                break',
+  '            continuation_cursor = next_cursor',
+  '            cursor = next_cursor',
+].join('\n')
+
+const CLIENT_RETURN_OLD = [
+  '        return tweets[:count]',
+  '',
+  '    def _fetch_user_list(self, operation_name, user_id, count, get_instructions):',
+].join('\n')
+const CLIENT_RETURN_NEW = [
+  `        if return_cursor:  # ${MARKER_FEED_CURSOR}`,
+  '            return tweets[:count], continuation_cursor',
+  '        return tweets[:count]',
+  '',
+  '    def _fetch_user_list(self, operation_name, user_id, count, get_instructions):',
+].join('\n')
+
+// K (cli.py side): `feed` gains --cursor and emits pagination on the envelope.
+const CLI_FEED_SIG_OLD = [
+  "@click.option(\"--full-text\", is_flag=True, help=\"Show full tweet text in table output.\")",
+  '@click.pass_context',
+  'def feed(ctx, feed_type, max_count, as_json, as_yaml, input_file, output_file, do_filter, full_text):',
+  '    # type: (Any, str, Optional[int], bool, bool, Optional[str], Optional[str], bool, bool) -> None',
+  '    """Fetch home timeline with optional filtering."""',
+  "    compact = ctx.obj.get(\"compact\", False)",
+].join('\n')
+const CLI_FEED_SIG_NEW = [
+  "@click.option(\"--full-text\", is_flag=True, help=\"Show full tweet text in table output.\")",
+  `@click.option("--cursor", type=str, default=None, help="Pagination cursor for continuing a previous feed request.")  # ${MARKER_FEED_CURSOR}`,
+  '@click.pass_context',
+  'def feed(ctx, feed_type, max_count, as_json, as_yaml, input_file, output_file, do_filter, full_text, cursor):',
+  '    # type: (Any, str, Optional[int], bool, bool, Optional[str], Optional[str], bool, bool, Optional[str]) -> None',
+  '    """Fetch home timeline with optional filtering."""',
+  `    next_cursor = None  # type: Optional[str]  # ${MARKER_FEED_CURSOR}`,
+  "    compact = ctx.obj.get(\"compact\", False)",
+].join('\n')
+
+const CLI_FEED_FETCH_OLD = [
+  '            if feed_type == "following":',
+  '                tweets = client.fetch_following_feed(fetch_count)',
+  '            else:',
+  '                tweets = client.fetch_home_timeline(fetch_count)',
+].join('\n')
+const CLI_FEED_FETCH_NEW = [
+  '            if feed_type == "following":',
+  `                tweets, next_cursor = client.fetch_following_feed(fetch_count, cursor=cursor, return_cursor=True)  # ${MARKER_FEED_CURSOR}`,
+  '            else:',
+  `                tweets, next_cursor = client.fetch_home_timeline(fetch_count, cursor=cursor, return_cursor=True)  # ${MARKER_FEED_CURSOR}`,
+].join('\n')
+
+const CLI_FEED_EMIT_OLD = [
+  '    save_tweet_cache(filtered)',
+  '',
+  '    if emit_structured(tweets_to_data(filtered), as_json=as_json, as_yaml=as_yaml):',
+  '        return',
+  '',
+  '    title = "👥 Following" if feed_type == "following" else "📱 Twitter"',
+].join('\n')
+const CLI_FEED_EMIT_NEW = [
+  '    save_tweet_cache(filtered)',
+  '',
+  `    # ${MARKER_FEED_CURSOR} — pagination metadata on the structured envelope`,
+  '    payload = success_payload(tweets_to_data(filtered))',
+  '    if next_cursor:',
+  '        payload["pagination"] = {"nextCursor": next_cursor}',
+  '    if emit_structured(payload, as_json=as_json, as_yaml=as_yaml):',
+  '        return',
+  '',
+  '    title = "👥 Following" if feed_type == "following" else "📱 Twitter"',
 ].join('\n')
 
 // E: fallback IDs refreshed 2026-08-28 from https://raw.githubusercontent.com/fa0311/twitter-openapi/refs/heads/main/src/config/placeholder.json
@@ -404,6 +600,24 @@ function applyPatches(source) {
     changed = true
   }
 
+  // K — feed cursor pagination (client side). Skips when upstream ships it
+  // natively (git main has `start_cursor=`; a future PyPI release may too).
+  if (!patched.includes(MARKER_FEED_CURSOR) && !patched.includes('start_cursor=')) {
+    for (const [oldText, newText] of [
+      [CLIENT_HOME_OLD, CLIENT_HOME_NEW],
+      [CLIENT_FETCHSIG_OLD, CLIENT_FETCHSIG_NEW],
+      [CLIENT_CURSOR_INIT_OLD, CLIENT_CURSOR_INIT_NEW],
+      [CLIENT_BREAKS_OLD, CLIENT_BREAKS_NEW],
+      [CLIENT_RETURN_OLD, CLIENT_RETURN_NEW],
+    ]) {
+      if (!patched.includes(oldText)) {
+        return { error: 'client.py no longer contains the expected feed/timeline cursor block — the CLI may have updated upstream. Review scripts/patch-twitter-cli.cjs anchors.' }
+      }
+      patched = patched.replace(oldText, newText)
+      changed = true
+    }
+  }
+
   if (!changed) return { source: patched, alreadyPatched: true }
   return { source: patched, alreadyPatched: false }
 }
@@ -421,6 +635,8 @@ function applyPinnedPatches(dir) {
     ['models.py', MODELS_VIEWER_OLD, MODELS_VIEWER_NEW, MARKER_VIEWER],
     ['serialization.py', SERIALIZATION_VIEWER_OLD, SERIALIZATION_VIEWER_NEW, MARKER_VIEWER],
     ['serialization.py', SERIALIZATION_QUOTE_OLD, SERIALIZATION_QUOTE_NEW, MARKER_QUOTE],
+    // Upgrade existing quote-media v1 (author without avatar/verified) in-place
+    ['serialization.py', SERIALIZATION_QUOTE_V1_OLD, SERIALIZATION_QUOTE_V1_NEW, 'profileImageUrl": tweet.quoted_tweet.author.profile_image_url'],
   ]) {
     const filePath = path.join(dir, file)
     if (!fs.existsSync(filePath)) {
@@ -440,6 +656,36 @@ function applyPinnedPatches(dir) {
     results.push({ file, patched: true })
   }
   return results
+}
+
+/** K — feed cursor pagination on cli.py (the `feed` command): `--cursor` in,
+ *  `pagination.nextCursor` out on the structured envelope. Sibling of
+ *  client.py (same package dir). Skips when the feature already exists
+ *  (marker or a native upstream `--cursor` help string). */
+function applyFeedCursorCliPatch(dir, checkOnly) {
+  const filePath = path.join(dir, 'cli.py')
+  if (!fs.existsSync(filePath)) return { skipped: 'cli.py not found' }
+  const source = fs.readFileSync(filePath, 'utf8')
+  if (
+    source.includes(MARKER_FEED_CURSOR) ||
+    source.includes('Pagination cursor for continuing a previous feed request')
+  ) {
+    return { skipped: 'already patched or native' }
+  }
+  let patched = source
+  for (const [oldText, newText] of [
+    [CLI_FEED_SIG_OLD, CLI_FEED_SIG_NEW],
+    [CLI_FEED_FETCH_OLD, CLI_FEED_FETCH_NEW],
+    [CLI_FEED_EMIT_OLD, CLI_FEED_EMIT_NEW],
+  ]) {
+    if (!patched.includes(oldText)) {
+      return { error: 'cli.py feed command anchor not found — the CLI may have updated upstream. Review scripts/patch-twitter-cli.cjs anchors.' }
+    }
+    patched = patched.replace(oldText, newText)
+  }
+  if (checkOnly) return { checkFailed: true }
+  fs.writeFileSync(filePath, patched, 'utf8')
+  return { patched: true }
 }
 
 function applyGraphqlPatch(source) {
@@ -534,6 +780,21 @@ function applyTwitterCliPatch(options = {}) {
     reasons.push('pin patches already applied')
   }
 
+  // K — feed cursor pagination on cli.py (client.py side landed in applyPatches)
+  const feedCursor = applyFeedCursorCliPatch(pinDir, options.checkOnly)
+  if (feedCursor.error) {
+    return { ok: false, patched: false, path: clientPy, reason: feedCursor.error }
+  }
+  if (feedCursor.checkFailed) {
+    return { ok: true, patched: false, reason: 'feed-cursor patch not applied', path: clientPy, checkFailed: true }
+  }
+  if (feedCursor.patched) {
+    totalPatched = true
+    reasons.push('feed-cursor patch applied')
+  } else {
+    reasons.push(`feed-cursor: ${feedCursor.skipped ?? 'no change'}`)
+  }
+
   // If neither file needed patching, we're already patched
   if (!totalPatched) {
     return { ok: true, patched: false, reason: reasons.join(', '), path: clientPy }
@@ -549,7 +810,7 @@ function cliExitCode(result) {
   return 0
 }
 
-module.exports = { applyTwitterCliPatch, resolveClientPy, cliExitCode, MARKER, MARKER_USERTWEETS, MARKER_PIN, MARKER_VIEWER, MARKER_QUOTE, _internals: { applyPatches, applyGraphqlPatch, applyPinnedPatches } }
+module.exports = { applyTwitterCliPatch, resolveClientPy, cliExitCode, MARKER, MARKER_USERTWEETS, MARKER_PIN, MARKER_VIEWER, MARKER_QUOTE, MARKER_FEED_CURSOR, _internals: { applyPatches, applyGraphqlPatch, applyPinnedPatches, applyFeedCursorCliPatch } }
 
 if (require.main === module) {
   const checkOnly = process.argv.includes('--check')

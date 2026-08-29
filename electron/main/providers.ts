@@ -9,12 +9,21 @@ import {
   listActiveCustomProviders,
   getCustomProviderCredential,
 } from './db'
-import { customModelId, OPENAI_MODEL_CATALOG, ANTHROPIC_MODEL_CATALOG, type ModelRef } from './models'
+import {
+  customModelId,
+  GOOGLE_MODEL_CATALOG,
+  ZHIPU_MODEL_CATALOG,
+  OPENAI_MODEL_CATALOG,
+  ANTHROPIC_MODEL_CATALOG,
+  type ModelRef,
+} from './models'
 import { logger } from './log'
 
 export {
   parseModelRef,
   customModelId,
+  GOOGLE_MODEL_CATALOG,
+  ZHIPU_MODEL_CATALOG,
   OPENAI_MODEL_CATALOG,
   ANTHROPIC_MODEL_CATALOG,
 } from './models'
@@ -73,18 +82,8 @@ function hasKeysFor(kind: Exclude<ProviderKind, 'custom'>): boolean {
 export function buildChatFallbackChain(): string[] {
   const chain: string[] = []
 
-  if (hasKeysFor('google')) {
-    chain.push('gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite')
-  }
-
-  if (hasKeysFor('zhipu')) {
-    if (getProfile()?.zai_coding_plan) {
-      // Coding-plan endpoints only serve the coding models.
-      chain.push('glm-5.3', 'glm-5-turbo')
-    } else {
-      chain.push('glm-5.3', 'glm-5-turbo', 'glm-4.7-flash', 'glm-4.5-flash')
-    }
-  }
+  if (hasKeysFor('google')) chain.push(...GOOGLE_MODEL_CATALOG.map(m => m.id))
+  if (hasKeysFor('zhipu')) chain.push(...ZHIPU_MODEL_CATALOG.map(m => m.id))
 
   if (hasKeysFor('openai')) chain.push(...OPENAI_MODEL_CATALOG.map(m => `openai/${m.id}`))
   if (hasKeysFor('anthropic')) chain.push(...ANTHROPIC_MODEL_CATALOG.map(m => `anthropic/${m.id}`))

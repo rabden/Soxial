@@ -69,9 +69,9 @@ export interface CredentialVerificationReport {
  */
 export const FALLBACK_PROBE_MODELS: Record<ProviderName, string> = {
   google: 'gemini-3.5-flash-lite',
-  zhipu: 'glm-4.7-flash',
-  openai: OPENAI_MODEL_CATALOG[OPENAI_MODEL_CATALOG.length - 1].id,
-  anthropic: ANTHROPIC_MODEL_CATALOG[ANTHROPIC_MODEL_CATALOG.length - 1].id,
+  zhipu: 'glm-4.6v-flash',
+  openai: 'gpt-5.4-mini',
+  anthropic: 'claude-sonnet-5',
 }
 
 export const GOOGLE_PROBE_MODEL = FALLBACK_PROBE_MODELS.google

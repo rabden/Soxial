@@ -8,6 +8,14 @@
 export const LEGACY_MODEL_IDS: Readonly<Record<string, string>> = {
   'gemini-3.6-flash': 'gemini-3.7-flash',
   'glm-5.2': 'glm-5.3',
+  'glm-5-turbo': 'glm-5.3-flash',
+  'openai/gpt-5.2': 'openai/gpt-5.6-luna',
+  'openai/gpt-5-mini': 'openai/gpt-5.4-mini',
+  'openai/gpt-4.1': 'openai/gpt-5.5',
+  'openai/gpt-4o': 'openai/gpt-5.6-luna',
+  'anthropic/claude-opus-4-1': 'anthropic/claude-opus-5',
+  'anthropic/claude-sonnet-4-5': 'anthropic/claude-sonnet-5',
+  'anthropic/claude-haiku-4-5': 'anthropic/claude-sonnet-5',
 }
 
 export function normalizeModelId(model: string): string {
@@ -36,21 +44,38 @@ export const OPENAI_ID_PREFIX = 'openai/'
 export const ANTHROPIC_ID_PREFIX = 'anthropic/'
 export const CUSTOM_ID_PREFIX = 'custom/'
 
+export const GOOGLE_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash' },
+  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite' },
+]
+
+export const ZHIPU_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'glm-5.3', label: 'GLM 5.3' },
+  { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash' },
+  { id: 'glm-4.7-flash', label: 'GLM 4.7 Flash' },
+  { id: 'glm-4.5-flash', label: 'GLM 4.5 Flash' },
+  { id: 'glm-4.6v-flash', label: 'GLM 4.6V Flash' },
+]
+
 /**
  * Default catalogs for the built-in hosted providers — starting points, not
  * walls; user-defined custom endpoints cover anything not listed here.
+ * OpenAI default is gpt-5.6-luna, Anthropic default is claude-sonnet-5 — they
+ * sit first so the fallback chain tries the default first.
  */
 export const OPENAI_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'gpt-5.2', label: 'GPT-5.2' },
-  { id: 'gpt-5-mini', label: 'GPT-5 mini' },
-  { id: 'gpt-4.1', label: 'GPT-4.1' },
-  { id: 'gpt-4o', label: 'GPT-4o' },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { id: 'gpt-5.5', label: 'GPT-5.5' },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
 ]
 
 export const ANTHROPIC_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'claude-opus-4-1', label: 'Claude Opus 4.1' },
-  { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
-  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+  { id: 'claude-opus-5', label: 'Claude Opus 5' },
+  { id: 'claude-fable-5', label: 'Claude Fable 5' },
 ]
 
 /** Compose a fully-qualified model id from a custom provider row and bare model id. */
@@ -80,4 +105,21 @@ export function parseModelRef(rawModel: string): ModelRef {
  */
 export function apiKeyProviderFor(kind: ProviderKind): string {
   return kind
+}
+
+// ─── Vision capability ──────────────────────────────────────────────────────
+// Central truth for which models can see images. Used by the one-shot drafter
+// and the main agent's image handling. Kept here so a model swap edits one place.
+
+const GOOGLE_VISION_IDS = new Set(['gemini-3.7-flash', 'gemini-3.1-pro', 'gemini-3.5-flash-lite'])
+const ZHIPU_VISION_IDS = new Set(['glm-5.3-flash', 'glm-4.6v-flash'])
+
+export function isVisionCapable(modelId: string): boolean {
+  const ref = parseModelRef(modelId)
+  if (ref.kind === 'google') return GOOGLE_VISION_IDS.has(ref.modelId)
+  if (ref.kind === 'zhipu') return ZHIPU_VISION_IDS.has(ref.modelId)
+  if (ref.kind === 'openai' || ref.kind === 'anthropic') return true
+  // Custom endpoints: assume vision capable — the caller will discover otherwise.
+  if (ref.kind === 'custom') return true
+  return false
 }

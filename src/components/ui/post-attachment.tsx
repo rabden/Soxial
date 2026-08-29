@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { cn } from 'src/lib/utils'
 import { Loader2, Link2, FileText } from 'lucide-react'
 
@@ -131,13 +131,51 @@ function LinkPreview({ url, title, description, image }: { url: string; title?: 
 
 let activeVideo: HTMLVideoElement | null = null
 
+/** Remount budget after transient failures — 1 initial load + 2 retries. */
+const VIDEO_MAX_ATTEMPTS = 2
+
 function VideoMedia({ src, type, poster, fill }: { src: string; type?: string; poster?: string; fill?: boolean }) {
   const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const [ready, setReady] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // StrictMode double-invokes state updaters — keep the retry bookkeeping in
+  // a ref so handleError stays side-effect-free inside setState.
+  const attemptRef = useRef(0)
 
   // ponytail: proxy twimg.com video URLs through main process (bypasses Referer 403)
   const proxySrc = decodeUrl(src).replace(/^https:\/\/(.*\.twimg\.com\/)/, 'twimg://$1')
   const isGif = type === 'gif'
+
+  // Fresh retry budget per source; clear any pending retry on unmount.
+  useEffect(() => {
+    attemptRef.current = 0
+    setAttempt(0)
+    setFailed(false)
+    setReady(false)
+  }, [proxySrc])
+  useEffect(() => () => {
+    if (retryTimer.current) clearTimeout(retryTimer.current)
+  }, [])
+
+  // Transient failures (severed stream, CDN 5xx blip) are common on twimg —
+  // remount the <video> after a short backoff so Chromium re-issues the
+  // request; only surface the failure UI once the budget is spent.
+  const handleError = useCallback(() => {
+    setReady(false)
+    if (attemptRef.current >= VIDEO_MAX_ATTEMPTS) {
+      setFailed(true)
+      return
+    }
+    if (retryTimer.current) clearTimeout(retryTimer.current)
+    const delay = 400 * 2 ** attemptRef.current
+    const next = attemptRef.current + 1
+    retryTimer.current = setTimeout(() => {
+      attemptRef.current = next
+      setAttempt(next)
+    }, delay)
+  }, [])
 
   useEffect(() => {
     if (isGif) return
@@ -170,7 +208,7 @@ function VideoMedia({ src, type, poster, fill }: { src: string; type?: string; p
       observer.disconnect()
       if (activeVideo === video) activeVideo = null
     }
-  }, [isGif, proxySrc])
+  }, [isGif, proxySrc, attempt])
 
   if (failed) {
     return (
@@ -181,41 +219,53 @@ function VideoMedia({ src, type, poster, fill }: { src: string; type?: string; p
     )
   }
 
+  // key={attempt} (passed directly on each <video>) forces a fresh element
+  // per retry — Chromium keeps the dead pipeline of an errored <video>, so
+  // recovery must be a remount, not a src re-assignment.
+  const videoProps = {
+    src: proxySrc,
+    poster: poster ? decodeUrl(poster) : undefined,
+    onError: handleError,
+    onCanPlay: () => setReady(true),
+    className: cn(fill ? 'size-full' : 'w-full max-h-[400px]', 'object-cover'),
+  }
+
+  // While a retry is in flight the element is blank — show a quiet spinner.
+  const spinner = !ready && attempt > 0 ? (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+    </div>
+  ) : null
+
   if (isGif) {
     return (
-      <video
-        src={proxySrc}
-        poster={poster ? decodeUrl(poster) : undefined}
-        className={cn(fill ? 'size-full' : 'w-full max-h-[400px]', 'object-cover')}
-        muted
-        autoPlay
-        loop
-        playsInline
-        preload="auto"
-        onError={() => setFailed(true)}
-      />
+      <div className={cn('relative', fill && 'size-full')}>
+        <video key={attempt} {...videoProps} muted autoPlay loop playsInline preload="auto" />
+        {spinner}
+      </div>
     )
   }
 
   return (
-    <video
-      ref={videoRef}
-      src={proxySrc}
-      poster={poster ? decodeUrl(poster) : undefined}
-      className={cn(fill ? 'size-full' : 'w-full max-h-[400px]', 'object-cover')}
-      controls
-      muted
-      playsInline
-      preload="metadata"
-      onError={() => setFailed(true)}
-      onPlay={() => {
-        if (activeVideo && activeVideo !== videoRef.current) activeVideo.pause()
-        if (videoRef.current) activeVideo = videoRef.current
-      }}
-      onPause={() => {
-        if (activeVideo === videoRef.current) activeVideo = null
-      }}
-    />
+    <div className={cn('relative', fill && 'size-full')}>
+      <video
+        key={attempt}
+        ref={videoRef}
+        {...videoProps}
+        controls
+        muted
+        playsInline
+        preload="metadata"
+        onPlay={() => {
+          if (activeVideo && activeVideo !== videoRef.current) activeVideo.pause()
+          if (videoRef.current) activeVideo = videoRef.current
+        }}
+        onPause={() => {
+          if (activeVideo === videoRef.current) activeVideo = null
+        }}
+      />
+      {spinner}
+    </div>
   )
 }
 
@@ -269,7 +319,12 @@ export function PostAttachments({
 }
 
 export function extractTweetAttachments(raw: any): PostAttachment[] {
-  return uniqByUrl([...extractTweetMedia(raw), ...extractTweetLinks(raw)])
+  const media = extractTweetMedia(raw)
+  // X behavior: native media replaces the link card — when a tweet has an
+  // image/video/gif, its URLs render as plain links in the text and never as
+  // an og preview next to the media.
+  if (media.length > 0) return uniqByUrl(media)
+  return uniqByUrl(extractTweetLinks(raw))
 }
 
 export function extractTweetMedia(raw: any): PostAttachment[] {

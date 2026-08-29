@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react'
-import { cn, openExternalUrl } from 'src/lib/utils'
+import { cn } from 'src/lib/utils'
 import {
   Send,
   Loader2,
@@ -13,6 +13,7 @@ import {
   Pin,
 } from 'lucide-react'
 import { PostAttachments, PostAttachment, extractTweetAttachments, expandTweetLinks } from 'src/components/ui/post-attachment'
+import { ReplyModal } from 'src/components/ui/reply-modal'
 import { getCachedPost, cachePost } from 'src/lib/post-cache'
 
 const fetchCache = new Map<string, Promise<any>>()
@@ -491,6 +492,9 @@ export function TweetCard({
   const [retweetCount, setRetweetCount] = useState(displayData.retweets ?? 0)
   const [bookmarked, setBookmarked] = useState(displayData.isBookmarked ?? false)
   const [showCopied, setShowCopied] = useState(false)
+  // Human reply modal (comment button)
+  const [replyOpen, setReplyOpen] = useState(false)
+  const [extraReplies, setExtraReplies] = useState(0)
 
   useEffect(() => {
     setLiked(displayData.isLiked ?? false)
@@ -575,14 +579,11 @@ export function TweetCard({
     const isRetweet = displayData.isRetweet || Boolean(displayData.retweetedBy)
 
     return (
+      // No row-level click-through: opening x.com happens only through
+      // explicit affordances (text links, the card's X anchor, share).
       <div
-        onClick={() => {
-          if (!preview && tweetUrl) {
-            openExternalUrl(tweetUrl)
-          }
-        }}
         className={cn(
-          'w-full border-b border-border/60 hover:bg-white/[0.02] transition-colors px-4 py-3 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_180px]',
+          'w-full border-b border-border/60 hover:bg-white/[0.02] transition-colors px-4 py-3 [content-visibility:auto] [contain-intrinsic-size:auto_180px]',
           className
         )}
       >
@@ -667,15 +668,8 @@ export function TweetCard({
                   ? []
                   : extractTweetAttachments(q)
               return (
-              <div
-                className="mt-3 rounded-2xl border border-white/[0.12] overflow-hidden hover:bg-white/[0.03] transition-colors cursor-pointer"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (!preview && qHandle && q.id) {
-                    openExternalUrl(`https://x.com/${qHandle}/status/${q.id}`)
-                  }
-                }}
-              >
+              // No click-through to x.com — the quote is content, not a link.
+              <div className="mt-3 rounded-2xl border border-white/[0.12] overflow-hidden">
                 <div className="p-3 pb-0">
                   {qHandle && (
                     <div className="flex items-center gap-1.5 min-w-0">
@@ -699,7 +693,7 @@ export function TweetCard({
                       )}
                     </div>
                   )}
-                  <div className="mt-1.5 pb-3 text-[14px] leading-[19px] text-foreground whitespace-pre-wrap break-words">
+                  <div className="mt-1.5 pb-3 text-[14px] leading-[19px] text-foreground whitespace-pre-wrap break-words line-clamp-4">
                     {formatRichContent(stripMediaLinks(expandTweetLinks(q.text || '', q), q.media))}
                   </div>
                 </div>
@@ -724,14 +718,18 @@ export function TweetCard({
               {/* Reply — comment not yet implemented, keep inert */}
               <button
                 type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (!preview) setReplyOpen(true)
+                }}
                 className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors -ml-1.5"
                 aria-label="Reply"
               >
                 <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
                   <MessageCircle className="size-4" />
                 </div>
-                {displayData.replies !== undefined && displayData.replies > 0 && (
-                  <span className="text-xs">{fmt(displayData.replies)}</span>
+                {(displayData.replies ?? 0) + extraReplies > 0 && (
+                  <span className="text-xs">{fmt((displayData.replies ?? 0) + extraReplies)}</span>
                 )}
               </button>
 
@@ -807,7 +805,10 @@ export function TweetCard({
                 >
                   <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
                     {showCopied ? (
-                      <span className="text-[10px] font-bold px-1">✓</span>
+                      // Fixed 16×16 box — same footprint as the Share2 icon.
+                      // A bare text span's line box grew the action row by a
+                      // few px while the checkmark was showing.
+                      <span className="flex size-4 items-center justify-center text-[10px] font-bold leading-none">✓</span>
                     ) : (
                       <Share2 className="size-4" />
                     )}
@@ -826,6 +827,29 @@ export function TweetCard({
             )}
           </div>
         </div>
+
+        {/* Human reply dialog (comment button) */}
+        {!preview && replyOpen && (
+          <ReplyModal
+            open={replyOpen}
+            onClose={() => setReplyOpen(false)}
+            onPosted={() => setExtraReplies((n) => n + 1)}
+            tweet={{
+              id: tweetIdForLink,
+              authorName: displayData.authorName,
+              authorHandle: displayData.authorHandle,
+              authorImage: displayData.authorImage,
+              verified: displayData.verified,
+              content: displayData.content,
+              timestampLabel: timeAgo(displayData.timestamp),
+              quotedTweet: displayData.quotedTweet as any,
+              // Media (fast-path refusal + drafting context) — links excluded.
+              media: (displayData.attachments ?? [])
+                .filter((a) => a.type !== 'link' && a.url)
+                .map((a) => ({ type: a.type === 'image' ? 'photo' : String(a.type ?? ''), url: a.url ?? '' })),
+            }}
+          />
+        )}
       </div>
     )
   }

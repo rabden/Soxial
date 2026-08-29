@@ -49,8 +49,8 @@ describe('buildChatFallbackChain', () => {
   it('appends the full hosted catalogs once a provider has a key', () => {
     addApiKey('sk-test-openai', 'openai')
     const chain = buildChatFallbackChain()
-    expect(chain).toContain('openai/gpt-5.2')
-    expect(chain).toContain('openai/gpt-4o')
+    expect(chain).toContain('openai/gpt-5.6-luna')
+    expect(chain).toContain('openai/gpt-5.4-mini')
     expect(chain.some(id => id.startsWith('anthropic/'))).toBe(false)
   })
 
@@ -119,7 +119,7 @@ describe('custom provider credentials', () => {
 describe('hosted key resolution', () => {
   it('resolves namespaced ids through their own provider family', () => {
     const keyId = addApiKey('sk-resolve-me', 'openai')
-    const resolved = getAvailableApiKeyForModel('openai/gpt-4o')
+    const resolved = getAvailableApiKeyForModel('openai/gpt-5.6-luna')
     expect(resolved?.id).toBe(keyId)
     expect(resolved?.api_key).toBe('sk-resolve-me')
   })

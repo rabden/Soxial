@@ -71,7 +71,9 @@ describe('HumanBookmarks — renderer seam (T5)', () => {
     expect(screen.getAllByText('bookmark-7')).toHaveLength(1)
   })
 
-  it('stops at the connector cap', async () => {
+  // Renders 200 rows across ~20 growth rounds — needs more than the default
+  // 5s budget when the whole suite runs in parallel.
+  it('stops at the connector cap', { timeout: 20_000 }, async () => {
     // Growth: page 1 asks 10; the next window derives from items.length + 10;
     // a near-cap page jumps the request to 200, which reports exhausted.
     bookmarksMock.mockImplementation(async (req: { count?: number }) => {
