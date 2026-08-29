@@ -52,9 +52,10 @@ vi.mock('ai', () => ({
 
 import { runAgent } from '../electron/main/agent'
 import { COMPACTION_CARRIER_OPEN } from '../electron/main/compaction'
+import { compactionThresholdTokens } from '../electron/main/context-budget'
 
-/** The chain-head window's high-water mark — 'test-model-a' falls back to defaults. */
-const THRESHOLD = Math.floor(0.85 * (131_072 - 8_192))
+/** The flat compaction line (owner decision): 180k tokens, model-independent. */
+const THRESHOLD = compactionThresholdTokens()
 
 function okStreamResult(opts: { text?: string; responseMessages?: any[]; usage?: any } = {}) {
   const text = opts.text ?? 'here is the answer'
@@ -154,13 +155,13 @@ describe('runAgent context gate', () => {
     expect(JSON.stringify(sentMessages)).not.toContain(COMPACTION_CARRIER_OPEN)
   })
 
-  it('re-checks the gate when rotating onto a smaller-window fallback model', async () => {
-    // gemini (1M window) is exhausted; glm (128k window) takes over — its
-    // threshold is below the stored snapshot, so the gate must fire for it.
+  it('re-checks the gate when rotating onto the fallback model', async () => {
+    // The first model is exhausted and skipped; the gate still runs for the
+    // fallback before it samples.
     mocks.providers.buildChatFallbackChain.mockReturnValue(['gemini-3.7-flash', 'glm-5.3'])
     mocks.db.isModelExhaustedForAllKeys.mockImplementation((model: string) => model === 'gemini-3.7-flash')
     mocks.db.getChatSessionSteps.mockReturnValue(storedTurn)
-    mocks.db.getChatSessionContextTokens.mockReturnValue(100_000) // ≥ glm threshold (94_872), ≪ gemini's
+    mocks.db.getChatSessionContextTokens.mockReturnValue(THRESHOLD + 5_000)
 
     const run = baseRun()
     await runAgent(run)

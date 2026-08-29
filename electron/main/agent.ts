@@ -1167,15 +1167,14 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     }
 
     // ─── Context gate, re-checked per model attempt (spec #53) ──────────────
-    // Compact before sampling when the estimated context crosses this
-    // model's high-water mark. Provider-reported usage is the ground truth;
-    // the chars/4 estimator covers sessions without a snapshot. Re-checking
-    // per attempt is what protects model switches onto smaller-window
-    // fallbacks (e.g. 1M Gemini → 128k GLM); a prior gate compaction
-    // already shrank the persisted snapshot, so this converges instead of
+    // Compact before sampling when the estimated context crosses the
+    // absolute 180k compaction line (flat context policy). Provider-reported
+    // usage is the ground truth; the chars/4 estimator covers sessions
+    // without a snapshot. A prior gate compaction already shrank the
+    // persisted snapshot, so repeated checks converge instead of
     // re-summarizing needlessly.
     if (sessionId != null && modelMessages.length > 0) {
-      const threshold = compactionThresholdTokens(getModelWindow(currentModel))
+      const threshold = compactionThresholdTokens()
       const storedTokens = getChatSessionContextTokens(sessionId)
       const estimate = storedTokens != null
         ? storedTokens + estimateContextTokens('', appendedSinceLastResponse)

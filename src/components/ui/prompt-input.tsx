@@ -248,7 +248,7 @@ export interface PromptInputProps {
   onModelChange?: (model: string) => void;
   onEffortChange?: (effort: string) => void;
   /** Live context usage for the current session (ticket #59). Null → no gauge. */
-  contextState?: { usedTokens: number; usableTokens: number; compacted: boolean } | null;
+  contextState?: { usedTokens: number; compactsAtTokens: number; compacted: boolean } | null;
 }
 
 export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
@@ -1010,26 +1010,27 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
               </div>
             </div>
 
-            {/* Context gauge (ticket #59): usage share of the usable window,
-                fed from the agent runtime's per-session token snapshot. */}
-            {contextState && contextState.usableTokens > 0 && (
+            {/* Context gauge (ticket #59): progress toward the flat 180k
+                compaction line, fed from the agent runtime's per-session
+                token snapshot. */}
+            {contextState && contextState.compactsAtTokens > 0 && (
               <span
                 data-testid="context-gauge"
-                title={`~${Math.round(contextState.usedTokens / 1000)}k of ${Math.round(contextState.usableTokens / 1000)}k usable context tokens${contextState.compacted ? " · compacted history" : ""}`}
+                title={`~${Math.round(contextState.usedTokens / 1000)}k of the ${Math.round(contextState.compactsAtTokens / 1000)}k compaction line${contextState.compacted ? " · compacted history" : ""}`}
                 className="flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium text-foreground/40"
               >
                 <span
                   data-testid="context-gauge-dot"
                   className={cn(
                     "size-1.5 rounded-full",
-                    contextState.usedTokens / contextState.usableTokens >= 0.85
+                    contextState.usedTokens / contextState.compactsAtTokens >= 0.85
                       ? "bg-red-400/80"
-                      : contextState.usedTokens / contextState.usableTokens >= 0.7
+                      : contextState.usedTokens / contextState.compactsAtTokens >= 0.7
                         ? "bg-amber-400/80"
                         : "bg-foreground/30",
                   )}
                 />
-                {Math.min(999, Math.round((contextState.usedTokens / contextState.usableTokens) * 100))}%
+                {Math.min(999, Math.round((contextState.usedTokens / contextState.compactsAtTokens) * 100))}%
               </span>
             )}
 

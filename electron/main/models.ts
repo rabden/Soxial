@@ -60,18 +60,23 @@ export interface ModelCatalogEntry extends ModelWindow {
   label: string
 }
 
+/**
+ * Flat context policy (owner decision, supersedes per-family windows):
+ * every model presents a 200k-token context window; maxOutputTokens stays
+ * per-family (it only feeds output reserve and summarizer chunk sizing).
+ */
 export const GOOGLE_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
-  { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', contextWindow: 1_000_000, maxOutputTokens: 65_536 },
-  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', contextWindow: 1_000_000, maxOutputTokens: 65_536 },
-  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite', contextWindow: 1_000_000, maxOutputTokens: 65_536 },
+  { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', contextWindow: 200_000, maxOutputTokens: 65_536 },
+  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', contextWindow: 200_000, maxOutputTokens: 65_536 },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite', contextWindow: 200_000, maxOutputTokens: 65_536 },
 ]
 
 export const ZHIPU_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
-  { id: 'glm-5.3', label: 'GLM 5.3', contextWindow: 128_000, maxOutputTokens: 16_384 },
-  { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
-  { id: 'glm-4.7-flash', label: 'GLM 4.7 Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
-  { id: 'glm-4.5-flash', label: 'GLM 4.5 Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
-  { id: 'glm-4.6v-flash', label: 'GLM 4.6V Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
+  { id: 'glm-5.3', label: 'GLM 5.3', contextWindow: 200_000, maxOutputTokens: 16_384 },
+  { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', contextWindow: 200_000, maxOutputTokens: 16_384 },
+  { id: 'glm-4.7-flash', label: 'GLM 4.7 Flash', contextWindow: 200_000, maxOutputTokens: 16_384 },
+  { id: 'glm-4.5-flash', label: 'GLM 4.5 Flash', contextWindow: 200_000, maxOutputTokens: 16_384 },
+  { id: 'glm-4.6v-flash', label: 'GLM 4.6V Flash', contextWindow: 200_000, maxOutputTokens: 16_384 },
 ]
 
 /**
@@ -81,21 +86,21 @@ export const ZHIPU_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
  * sit first so the fallback chain tries the default first.
  */
 export const OPENAI_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', contextWindow: 400_000, maxOutputTokens: 128_000 },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', contextWindow: 400_000, maxOutputTokens: 128_000 },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', contextWindow: 400_000, maxOutputTokens: 128_000 },
-  { id: 'gpt-5.5', label: 'GPT-5.5', contextWindow: 400_000, maxOutputTokens: 128_000 },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini', contextWindow: 400_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.5', label: 'GPT-5.5', contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini', contextWindow: 200_000, maxOutputTokens: 128_000 },
 ]
 
 export const ANTHROPIC_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
-  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
-  { id: 'claude-opus-5', label: 'Claude Opus 5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
-  { id: 'claude-fable-5', label: 'Claude Fable 5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: 'claude-opus-5', label: 'Claude Opus 5', contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: 'claude-fable-5', label: 'Claude Fable 5', contextWindow: 200_000, maxOutputTokens: 128_000 },
 ]
 
-/** Conservative fallback for unknown bare ids and custom endpoints (ticket #55). */
-export const DEFAULT_MODEL_WINDOW: ModelWindow = { contextWindow: 131_072, maxOutputTokens: 8_192 }
+/** Fallback for unknown bare ids and custom endpoints — same flat policy. */
+export const DEFAULT_MODEL_WINDOW: ModelWindow = { contextWindow: 200_000, maxOutputTokens: 8_192 }
 
 const ALL_MODEL_CATALOGS: ReadonlyArray<ReadonlyArray<ModelCatalogEntry>> = [
   GOOGLE_MODEL_CATALOG,
