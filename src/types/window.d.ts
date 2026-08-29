@@ -66,7 +66,6 @@ interface Window {
     updateSessionTitle: (sessionId: number, title: string) => Promise<any>
     deleteSession: (sessionId: number) => Promise<any>
     generateTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>
-    generateSummary: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>
     getSessionSummary: (sessionId: number) => Promise<string | null>
     reTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>
     generateQuickActions: () => Promise<any>

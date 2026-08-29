@@ -44,18 +44,34 @@ export const OPENAI_ID_PREFIX = 'openai/'
 export const ANTHROPIC_ID_PREFIX = 'anthropic/'
 export const CUSTOM_ID_PREFIX = 'custom/'
 
-export const GOOGLE_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash' },
-  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
-  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite' },
+// ─── Catalog entries ────────────────────────────────────────────────────────
+// contextWindow / maxOutputTokens feed the context gate (spec #53, ticket
+// #55): every entry carries its family's window; unknown ids and custom
+// endpoints fall back to DEFAULT_MODEL_WINDOW. One place to flip a number.
+
+/** Context window + output cap for one model — the context gate's unit of supply. */
+export interface ModelWindow {
+  contextWindow: number
+  maxOutputTokens: number
+}
+
+export interface ModelCatalogEntry extends ModelWindow {
+  id: string
+  label: string
+}
+
+export const GOOGLE_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
+  { id: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash', contextWindow: 1_000_000, maxOutputTokens: 65_536 },
+  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', contextWindow: 1_000_000, maxOutputTokens: 65_536 },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite', contextWindow: 1_000_000, maxOutputTokens: 65_536 },
 ]
 
-export const ZHIPU_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'glm-5.3', label: 'GLM 5.3' },
-  { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash' },
-  { id: 'glm-4.7-flash', label: 'GLM 4.7 Flash' },
-  { id: 'glm-4.5-flash', label: 'GLM 4.5 Flash' },
-  { id: 'glm-4.6v-flash', label: 'GLM 4.6V Flash' },
+export const ZHIPU_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
+  { id: 'glm-5.3', label: 'GLM 5.3', contextWindow: 128_000, maxOutputTokens: 16_384 },
+  { id: 'glm-5.3-flash', label: 'GLM 5.3 Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
+  { id: 'glm-4.7-flash', label: 'GLM 4.7 Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
+  { id: 'glm-4.5-flash', label: 'GLM 4.5 Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
+  { id: 'glm-4.6v-flash', label: 'GLM 4.6V Flash', contextWindow: 128_000, maxOutputTokens: 16_384 },
 ]
 
 /**
@@ -64,19 +80,39 @@ export const ZHIPU_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> =
  * OpenAI default is gpt-5.6-luna, Anthropic default is claude-sonnet-5 — they
  * sit first so the fallback chain tries the default first.
  */
-export const OPENAI_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
-  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
-  { id: 'gpt-5.5', label: 'GPT-5.5' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' },
+export const OPENAI_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
+  { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', contextWindow: 400_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', contextWindow: 400_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', contextWindow: 400_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.5', label: 'GPT-5.5', contextWindow: 400_000, maxOutputTokens: 128_000 },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4 mini', contextWindow: 400_000, maxOutputTokens: 128_000 },
 ]
 
-export const ANTHROPIC_MODEL_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
-  { id: 'claude-opus-5', label: 'Claude Opus 5' },
-  { id: 'claude-fable-5', label: 'Claude Fable 5' },
+export const ANTHROPIC_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  { id: 'claude-opus-5', label: 'Claude Opus 5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  { id: 'claude-fable-5', label: 'Claude Fable 5', contextWindow: 1_000_000, maxOutputTokens: 128_000 },
 ]
+
+/** Conservative fallback for unknown bare ids and custom endpoints (ticket #55). */
+export const DEFAULT_MODEL_WINDOW: ModelWindow = { contextWindow: 131_072, maxOutputTokens: 8_192 }
+
+const ALL_MODEL_CATALOGS: ReadonlyArray<ReadonlyArray<ModelCatalogEntry>> = [
+  GOOGLE_MODEL_CATALOG,
+  ZHIPU_MODEL_CATALOG,
+  OPENAI_MODEL_CATALOG,
+  ANTHROPIC_MODEL_CATALOG,
+]
+
+/** Context window + output cap for a fully-qualified model id (ticket #55). */
+export function getModelWindow(rawModelId: string): ModelWindow {
+  const ref = parseModelRef(rawModelId)
+  for (const catalog of ALL_MODEL_CATALOGS) {
+    const hit = catalog.find(entry => entry.id === ref.modelId)
+    if (hit) return { contextWindow: hit.contextWindow, maxOutputTokens: hit.maxOutputTokens }
+  }
+  return DEFAULT_MODEL_WINDOW
+}
 
 /** Compose a fully-qualified model id from a custom provider row and bare model id. */
 export function customModelId(providerId: number, modelId: string): string {

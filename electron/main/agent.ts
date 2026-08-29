@@ -1,7 +1,10 @@
 import { streamText, generateText as aiGenerateText, isStepCount } from 'ai'
 import { isUnusableCompletion } from './agent-completion'
-import { getProfile, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb, getCustomProviderCredential } from './db'
-import { normalizeModelId, parseModelRef } from './models'
+import { getProfile, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb, getCustomProviderCredential, getChatSessionContextSummary, getChatSessionContextTokens, updateChatSessionContextTokens, updateChatSessionContextSummary } from './db'
+import { normalizeModelId, parseModelRef, getModelWindow } from './models'
+import { compactSessionHistory, isCompactionCarrier } from './compaction'
+import { isContextLengthError } from './context-errors'
+import { compactionThresholdTokens, estimateContextTokens } from './context-budget'
 import { createModelInstance, buildChatFallbackChain } from './providers'
 import { createTools } from './tools'
 import { SAFE_CAPABILITIES, filterToolsByCapability, listDeniedTools } from './tool-capabilities'
@@ -921,6 +924,30 @@ function isAuthError(e: any): boolean {
 
 const MAX_TRANSIENT_RETRIES = 5
 
+/**
+ * Ground-truth context size from provider-reported usage (spec #53). The last
+ * sampling step's inputTokens is the full request size at the end of the
+ * turn; its own outputTokens ride on top for the next request. Falls back to
+ * the run's total usage (an over-estimate — the safe direction for a
+ * compaction gate) and returns null when the provider reports nothing.
+ */
+async function captureContextTokens(result: any): Promise<number | null> {
+  try {
+    const steps: any[] = await result.steps
+    const usage: any = steps?.[steps.length - 1]?.usage
+    if (usage && Number.isFinite(usage.inputTokens) && usage.inputTokens > 0) {
+      return usage.inputTokens + (Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0)
+    }
+  } catch { /* fall through to total usage */ }
+  try {
+    const total: any = await result.totalUsage
+    if (total && Number.isFinite(total.inputTokens) && total.inputTokens > 0) {
+      return total.inputTokens + (Number.isFinite(total.outputTokens) ? total.outputTokens : 0)
+    }
+  } catch { /* providers without usage reporting */ }
+  return null
+}
+
 // Sleep that resolves early if the run is aborted, so backoff waits don't block teardown.
 export function abortableSleep(ms: number, ac?: AbortController): Promise<void> {
   return new Promise((resolve) => {
@@ -940,7 +967,7 @@ export function abortableSleep(ms: number, ac?: AbortController): Promise<void> 
 /** Structured terminal-failure information, consumed by IPC error mapping. */
 export interface AgentFailureInfo {
   /** Stable machine kind — mirrors the grok-build SamplingErrorKind idea. */
-  errorKind: 'all-models-exhausted' | 'no-credentials' | 'rate-limited' | 'auth' | 'fatal' | 'empty-completions'
+  errorKind: 'all-models-exhausted' | 'no-credentials' | 'rate-limited' | 'auth' | 'fatal' | 'empty-completions' | 'context-overflow'
   attemptedModels: string[]
   isRateLimited: boolean
 }
@@ -1014,6 +1041,10 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   const attemptedModels: string[] = []
   let sawRateLimit = false
   let sawEmptyTurn = false
+  let sawContextOverflow = false
+  // Context-overflow recovery is allowed exactly once per run (spec #53):
+  // after that, rotation is the only remaining option.
+  let compactedThisRun = false
 
   const userCount = messages.filter(m => m.role === 'user').length
 
@@ -1022,16 +1053,40 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   const stored = sessionId != null ? getChatSessionSteps(sessionId) : null
   const lastMsg = messages[messages.length - 1]
   let baseMessages: any[]
+  // Model messages appended beyond the last provider response — the delta the
+  // context gate adds on top of the stored usage snapshot (spec #53).
+  let appendedSinceLastResponse: any[] = []
 
   if (options?.seedModelMessages && options.seedModelMessages.length > 0) {
     // Resume path: continue from the persisted model transcript exactly,
     // with its tool-call round-trips intact.
     baseMessages = options.seedModelMessages as any[]
     logger.info('agent', `continuing from ${baseMessages.length} seeded model message(s)`)
+  } else if (stored && stored.steps.length > 0 && isCompactionCarrier(stored.steps[0])) {
+    // Compacted session (spec #53): the stored transcript opens with the
+    // summary carrier — everything earlier than the tail lives only in that
+    // summary, so the raw app history must never flow back in. Append only
+    // the turns that postdate the last stored run.
+    if (stored.userCount === userCount) {
+      baseMessages = stored.steps
+      logger.info('agent', `reusing compacted transcript (${stored.steps.length} messages, same userCount ${userCount})`)
+    } else if (stored.userCount < userCount) {
+      const newAppMsgs = messages.filter(m => m.role === 'user').slice(stored.userCount)
+      const newModelMsgs = newAppMsgs.length > 0 ? await toModelMessages(newAppMsgs) : []
+      baseMessages = [...stored.steps, ...newModelMsgs]
+      appendedSinceLastResponse = newModelMsgs
+      logger.info('agent', `reusing compacted transcript + ${newModelMsgs.length} new msgs (stored userCount ${stored.userCount} → ${userCount})`)
+    } else {
+      // Renderer sent a shorter history than stored (fresh session state) —
+      // trust the compacted transcript.
+      baseMessages = stored.steps
+      logger.info('agent', `reusing compacted transcript as-is (stored userCount ${stored.userCount} > ${userCount})`)
+    }
   } else if (stored && stored.steps.length > 0 && stored.userCount === userCount - 1 && lastMsg?.role === 'user') {
     // Normal case: stored has the previous turn, append the new user message.
     const newUserMsgs = await toModelMessages([lastMsg])
     baseMessages = [...stored.steps, ...newUserMsgs]
+    appendedSinceLastResponse = newUserMsgs
     logger.info('agent', `reusing ${stored.steps.length} stored messages + ${newUserMsgs.length} new (userCount ${stored.userCount} → ${userCount})`)
   } else if (stored && stored.steps.length > 0 && stored.userCount === userCount) {
     // Retry / same-turn re-run: messages haven't advanced, reuse stored as-is.
@@ -1045,6 +1100,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     const newAppMsgs = messages.filter(m => m.role === 'user').slice(stored.userCount)
     const newModelMsgs = newAppMsgs.length > 0 ? await toModelMessages(newAppMsgs) : []
     baseMessages = [...stored.steps, ...newModelMsgs]
+    appendedSinceLastResponse = newModelMsgs
     logger.info('agent', `partial reuse: ${stored.steps.length} stored + ${newModelMsgs.length} new msgs (stored userCount ${stored.userCount} → ${userCount})`)
   } else {
     // No stored steps at all — full rebuild. All tool-call parts will carry the
@@ -1057,6 +1113,46 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   let modelMessages = baseMessages
   let fullText = ''
 
+  // Compacts the given transcript for this session and persists the result:
+  // pairing-repaired, carrier-first transcript + refreshed context snapshot.
+  // Returns the compacted transcript, or null when compaction failed open
+  // (spec #53).
+  const compactForSession = async (currentMessages: any[], modelId: string): Promise<any[] | null> => {
+    if (sessionId == null) return null
+    const outcome = await compactSessionHistory({
+      system,
+      modelMessages: currentMessages,
+      modelId,
+      priorSummary: getChatSessionContextSummary(sessionId),
+      // Compaction model (ticket #56): the fallback chain's head — the same
+      // utility selection titles and quick actions already use.
+      summarize: (req) => generateText([{ role: 'user', content: req.user }], req.system),
+    })
+    if (!outcome) {
+      logger.warn('agent', 'compaction failed open — proceeding uncompacted')
+      return null
+    }
+    // Post-compaction validation (spec #53): enforce tool-result pairing on
+    // the rebuilt history — the repair ladder synthesizes one typed result
+    // per dangling call id, so the compacted transcript is always
+    // provider-safe.
+    const compactedMessages = repairModelMessagePairing(outcome.compactedMessages)
+    try {
+      updateChatSessionContextSummary(sessionId, outcome.summary)
+      updateChatSessionSteps(sessionId, compactedMessages, userCount)
+      // Snapshot the compacted context so the next gate estimate reflects
+      // reality instead of the stale pre-compaction size.
+      updateChatSessionContextTokens(sessionId, estimateContextTokens(system, compactedMessages))
+    } catch (e: any) {
+      logger.error('agent', `failed to persist compaction: ${e?.message || e}`)
+    }
+    // The refreshed snapshot now covers the appended messages too — counting
+    // them again would double-charge the next gate estimate.
+    appendedSinceLastResponse = []
+    logger.info('agent', `compacted ${currentMessages.length} → ${compactedMessages.length} model messages (${outcome.tailUserCount} user turns kept verbatim)`)
+    return compactedMessages
+  }
+
   for (let i = 0; i < fallbackChain.length; i++) {
     const currentModel = fallbackChain[i]
     options?.onModelSwitch?.(currentModel, i + 1, fallbackChain.length)
@@ -1066,6 +1162,30 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(currentModel)) {
       logger.warn('agent', `model ${currentModel} exhausted for all keys, skipping`)
       continue
+    }
+
+    // ─── Context gate, re-checked per model attempt (spec #53) ──────────────
+    // Compact before sampling when the estimated context crosses this
+    // model's high-water mark. Provider-reported usage is the ground truth;
+    // the chars/4 estimator covers sessions without a snapshot. Re-checking
+    // per attempt is what protects model switches onto smaller-window
+    // fallbacks (e.g. 1M Gemini → 128k GLM); a prior gate compaction
+    // already shrank the persisted snapshot, so this converges instead of
+    // re-summarizing needlessly.
+    if (sessionId != null && modelMessages.length > 0) {
+      const threshold = compactionThresholdTokens(getModelWindow(currentModel))
+      const storedTokens = getChatSessionContextTokens(sessionId)
+      const estimate = storedTokens != null
+        ? storedTokens + estimateContextTokens('', appendedSinceLastResponse)
+        : estimateContextTokens(system, modelMessages)
+      if (estimate >= threshold) {
+        logger.warn('agent', `context estimate ${estimate} ≥ threshold ${threshold} for ${currentModel} — compacting before sampling`)
+        const compacted = await compactForSession(modelMessages, currentModel)
+        if (compacted) {
+          modelMessages = compacted
+          options?.onModelMessages?.(modelMessages)
+        }
+      }
     }
 
     attemptedModels.push(currentModel)
@@ -1304,6 +1424,13 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
             try {
               updateChatSessionSteps(sessionId, finalMessages, userCount)
             } catch (e) { logger.error('agent', 'failed to persist steps', e) }
+            // Context snapshot (spec #53): the last sampling step's input
+            // tokens are the full request size at the end of the turn; its
+            // own output rides on top for the next gate estimate.
+            try {
+              const usageTokens = await captureContextTokens(result)
+              if (usageTokens != null) updateChatSessionContextTokens(sessionId, usageTokens)
+            } catch { /* usage is best-effort */ }
           }
           options?.onModelMessages?.(finalMessages)
 
@@ -1361,6 +1488,28 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
             break
           }
 
+          if (sessionId != null && !compactedThisRun && isContextLengthError(e)) {
+            // Context overflow (spec #53): retrying or rotating keys cannot
+            // help — the request itself is too big. Compact once and
+            // resubmit the same key+model before giving up on this model.
+            compactedThisRun = true
+            logger.warn('agent', `context overflow from ${currentModel} — compacting and resubmitting once`, {
+              error: (e?.message || '').substring(0, 200),
+            })
+            const compacted = await compactForSession(modelMessages, currentModel)
+            if (compacted) {
+              modelMessages = compacted
+              options?.onModelMessages?.(modelMessages)
+              continue
+            }
+            // Recovery failed open — the overflow is unresolved.
+            sawContextOverflow = true
+          } else if (isContextLengthError(e)) {
+            // Overflow persisted even after this run's compaction budget —
+            // remember it so the terminal failure names the real cause.
+            sawContextOverflow = true
+          }
+
           if (isTransientError(e)) {
             // High-demand / 5xx / network: wait with backoff and retry the SAME key+model.
             if (transientRetries < MAX_TRANSIENT_RETRIES) {
@@ -1399,11 +1548,13 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   onError(
     rateLimitedChain
       ? 'All available models hit rate limits. Wait for the cooldown or add another provider key in Settings.'
-      : sawEmptyTurn
-        ? 'The model returned empty responses. Retry in a moment — if it keeps happening, switch models in Settings.'
-        : 'All available models failed. Check your provider credentials in Settings or try another model.',
+      : sawContextOverflow
+        ? 'The conversation outgrew the available models even after compaction. Start a new session, or switch to a model with a larger context window in Settings.'
+        : sawEmptyTurn
+          ? 'The model returned empty responses. Retry in a moment — if it keeps happening, switch models in Settings.'
+          : 'All available models failed. Check your provider credentials in Settings or try another model.',
     {
-      errorKind: attemptedModels.length === 0 ? 'no-credentials' : rateLimitedChain ? 'rate-limited' : sawEmptyTurn ? 'empty-completions' : 'all-models-exhausted',
+      errorKind: attemptedModels.length === 0 ? 'no-credentials' : rateLimitedChain ? 'rate-limited' : sawContextOverflow ? 'context-overflow' : sawEmptyTurn ? 'empty-completions' : 'all-models-exhausted',
       attemptedModels,
       isRateLimited: rateLimitedChain,
     },

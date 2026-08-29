@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
-import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, updateChatSessionContextSummary, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
+import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
 import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
@@ -1541,21 +1541,6 @@ function setupIpc() {
     } catch (e: any) {
       logger.error('main', 'chat:generateTitle error', e.message)
       return { success: false, title: null }
-    }
-  })
-
-  ipcMain.handle('chat:generateSummary', async (_e, sessionId: number, messages: { role: string; content: string }[]) => {
-    logger.info('main', 'chat:generateSummary')
-    try {
-      const text = messages.map(m => `${m.role}: ${m.content}`).join('\n').slice(-8000)
-      const summary = await generateText([
-        { role: 'user', content: `Summarize the key points and decisions from this conversation:\n\n${text}` }
-      ], 'You generate concise conversation summaries. Capture key decisions, context, and goals. 2-4 sentences.')
-      updateChatSessionContextSummary(sessionId, summary)
-      return { success: true, summary }
-    } catch (e: any) {
-      logger.error('main', 'chat:generateSummary error', e.message)
-      return { success: false, summary: null }
     }
   })
 

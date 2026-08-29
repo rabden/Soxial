@@ -13,8 +13,9 @@ export default defineConfig({
   test: {
     globalSetup: './scripts/vitest-global-setup.cjs',
     // `.delta/` holds agent worktree checkouts of this same repo — their test
-    // copies must not run alongside the real suite.
-    exclude: [...configDefaults.exclude, '**/.delta/**'],
+    // copies must not run alongside the real suite. `.tmp/` holds reference
+    // clones (grok-build, opencode) studied during design work — same rule.
+    exclude: [...configDefaults.exclude, '**/.delta/**', '**/.tmp/**'],
   },
   resolve: {
     alias: {
