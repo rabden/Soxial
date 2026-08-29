@@ -85,7 +85,7 @@ describe('HumanFeed — renderer seam', () => {
     expect(screen.getByText(/all caught up/i)).toBeTruthy()
   })
 
-  it('switching For you → Following resets the feed and reloads page 1', async () => {
+  it('switching For you → Following mounts the second timeline lazily and keeps the first alive', async () => {
     feedMock.mockImplementation(async (req: { type?: string }) =>
       req.type === 'following'
         ? okPage([makeTweet('f1', 'following-1')])
@@ -94,17 +94,23 @@ describe('HumanFeed — renderer seam', () => {
 
     render(<HumanFeed />)
     await screen.findByText('foryou-1')
+    expect(feedMock).toHaveBeenCalledTimes(1) // only the visited timeline fetched
 
     fireEvent.click(screen.getByRole('button', { name: 'Following' }))
 
     await screen.findByText('following-1')
-    expect(screen.queryByText('foryou-1')).toBeNull()
     const lastCall = feedMock.mock.calls[feedMock.mock.calls.length - 1][0]
     expect(lastCall.type).toBe('following')
     expect(lastCall.cursor).toBeUndefined()
+    // Keep-alive: the For-you list stays mounted (hidden) with its items.
+    expect(screen.getByText('foryou-1')).toBeTruthy()
+    // Switching back is instant — no additional request.
+    fireEvent.click(screen.getByRole('button', { name: 'For you' }))
+    await screen.findByText('foryou-1')
+    expect(feedMock).toHaveBeenCalledTimes(2)
   })
 
-  it('discards a stale page-1 response after the reset key changes', async () => {
+  it('a slow For-you response never leaks into the Following list', async () => {
     let releaseFirst: ((value: HumanResult<Paginated<HumanTweet>>) => void) | undefined
     feedMock.mockImplementation(async (req: { type?: string }) => {
       if (req.type === 'for-you' && !releaseFirst) {
@@ -122,11 +128,13 @@ describe('HumanFeed — renderer seam', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Following' }))
     await screen.findByText('following-1')
 
-    // Now let the stale For-you page resolve — it must be discarded.
+    // Now let the slow For-you page resolve — it settles into its own list.
     releaseFirst?.(okPage([makeTweet('y1', 'foryou-1')]))
     await waitFor(() => expect(feedMock).toHaveBeenCalledTimes(2))
-    await new Promise((r) => setTimeout(r, 10))
-    expect(screen.queryByText('foryou-1')).toBeNull()
+    await screen.findByText('foryou-1')
+    // Each timeline rendered exactly its own items.
+    expect(screen.getAllByText('following-1')).toHaveLength(1)
+    expect(screen.getAllByText('foryou-1')).toHaveLength(1)
   })
 
   it('shows the auth gate with re-check for auth failures', async () => {

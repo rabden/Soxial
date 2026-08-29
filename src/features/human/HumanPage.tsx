@@ -1,92 +1,60 @@
-import { useState } from 'react'
-import { motion } from 'motion/react'
+import { useState, useEffect } from 'react'
+import { cn } from 'src/lib/utils'
 import type { HumanTab } from './types'
-import { HUMAN_NAV_ITEMS } from './navigation'
 import HumanFeed from './components/HumanFeed'
 import HumanProfile from './components/HumanProfile'
 import HumanBookmarks from './components/HumanBookmarks'
 import HumanFollow from './components/HumanFollow'
 import HumanSearch from './components/HumanSearch'
 
-const springTransition = {
-  type: 'spring' as const,
-  stiffness: 450,
-  damping: 38,
-}
-
 interface HumanPageProps {
   activeTab?: HumanTab
+  /** Retained for API compatibility; navigation is now owned by the Sidebar. */
   onTabChange?: (tab: HumanTab) => void
-  /** Rebuild lock: tabs are inert while a handle rebuild runs (matches Sidebar). */
+  /** Rebuild lock: content is inert while a handle rebuild runs (matches Sidebar). */
   disabled?: boolean
 }
 
 export default function HumanPage({
   activeTab: controlledTab,
-  onTabChange,
+  // onTabChange is retained for compatibility but unused — navigation lives in Sidebar
+  onTabChange: _onTabChange,
   disabled = false,
 }: HumanPageProps) {
-  const [localTab, setLocalTab] = useState<HumanTab>('feed')
-  const currentTab = controlledTab ?? localTab
+  void _onTabChange
+  const currentTab = controlledTab ?? 'feed'
 
-  const handleTabSelect = (tab: HumanTab) => {
-    if (onTabChange) {
-      onTabChange(tab)
-    } else {
-      setLocalTab(tab)
-    }
-  }
+  // Keep-alive: lazy-mount tabs and preserve DOM (hidden/block) to avoid re-fetch
+  const [visitedTabs, setVisitedTabs] = useState<Set<HumanTab>>(() => new Set([currentTab]))
 
-  const isDarwin = typeof window !== 'undefined' && window.api?.platform === 'darwin'
+  useEffect(() => {
+    setVisitedTabs((prev) => {
+      if (prev.has(currentTab)) return prev
+      const next = new Set(prev)
+      next.add(currentTab)
+      return next
+    })
+  }, [currentTab])
 
   return (
     <div className="flex flex-col h-full w-full bg-black text-white select-none overflow-hidden">
-      {/* Top sticky tab bar */}
-      <div
-        className={`sticky top-0 z-30 flex items-center justify-center border-b border-white/[0.08] bg-black/80 backdrop-blur-md px-4 ${
-          isDarwin ? 'pt-10 pb-0' : 'pt-2 pb-0'
-        }`}
-      >
-        <nav className="flex items-center space-x-1 sm:space-x-4" aria-disabled={disabled} inert={disabled || undefined}>
-          {HUMAN_NAV_ITEMS.map((tab) => {
-            const active = currentTab === tab.id
-            const Icon = tab.icon
-            return (
-              <button
-                key={tab.id}
-                onClick={() => handleTabSelect(tab.id)}
-                disabled={disabled}
-                className={`relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors hover:text-white ${
-                  active ? 'text-white' : 'text-zinc-500'
-                } ${disabled ? 'opacity-40 pointer-events-none' : ''}`}
-              >
-                <Icon className="size-4" />
-                <span>{tab.label}</span>
-                {active && (
-                  <motion.span
-                    layoutId="humanTabIndicator"
-                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#1d9bf0]"
-                    transition={springTransition}
-                  />
-                )}
-              </button>
-            )
-          })}
-        </nav>
+      <div className="flex-1 min-h-0 relative overflow-hidden">
+        <div className={cn('h-full w-full', currentTab === 'feed' ? 'block' : 'hidden')}>
+          {visitedTabs.has('feed') && <HumanFeed disabled={disabled} />}
+        </div>
+        <div className={cn('h-full w-full', currentTab === 'profile' ? 'block' : 'hidden')}>
+          {visitedTabs.has('profile') && <HumanProfile disabled={disabled} />}
+        </div>
+        <div className={cn('h-full w-full', currentTab === 'bookmarks' ? 'block' : 'hidden')}>
+          {visitedTabs.has('bookmarks') && <HumanBookmarks />}
+        </div>
+        <div className={cn('h-full w-full', currentTab === 'follow' ? 'block' : 'hidden')}>
+          {visitedTabs.has('follow') && <HumanFollow disabled={disabled} />}
+        </div>
+        <div className={cn('h-full w-full', currentTab === 'search' ? 'block' : 'hidden')}>
+          {visitedTabs.has('search') && <HumanSearch disabled={disabled} />}
+        </div>
       </div>
-
-      {/* Tab Content Area */}
-      {currentTab === 'feed' ? (
-        <HumanFeed disabled={disabled} />
-      ) : currentTab === 'profile' ? (
-        <HumanProfile disabled={disabled} />
-      ) : currentTab === 'bookmarks' ? (
-        <HumanBookmarks />
-      ) : currentTab === 'follow' ? (
-        <HumanFollow disabled={disabled} />
-      ) : (
-        <HumanSearch disabled={disabled} />
-      )}
     </div>
   )
 }

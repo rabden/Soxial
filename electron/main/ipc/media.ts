@@ -1,9 +1,53 @@
-import { app, ipcMain } from 'electron'
-import { readFileSync } from 'fs'
-import { basename, join } from 'path'
+import { app, dialog, ipcMain } from 'electron'
+import { readFileSync, statSync } from 'fs'
+import { basename, extname, join } from 'path'
 import { errorForRenderer } from '../errors'
 
+/** Images the X connector accepts (twitter-cli upload_media gate). */
+const REPLY_IMAGE_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+}
+const REPLY_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+
 export function registerMediaHandlers(): void {
+  // Native multi-select picker for reply attachments — resolves absolute
+  // paths in main (renderer File objects lost their paths across the
+  // contextBridge, so webUtils.getPathForFile was unreliable here).
+  ipcMain.handle('dialog:pickImages', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Add images',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }],
+    })
+    if (result.canceled) return { ok: true as const, paths: [] }
+    return { ok: true as const, paths: result.filePaths.slice(0, 4) }
+  })
+
+  // Read a picked image as a data URL for <img> previews (renderer cannot
+  // load arbitrary local paths). Enforces the connector's image gates.
+  ipcMain.handle('media:dataUrl', (_event, filePath: string) => {
+    const mime = REPLY_IMAGE_MIME[extname(filePath).toLowerCase()]
+    if (!mime) {
+      const appError = errorForRenderer('Only jpg, png, gif or webp images are supported')
+      return { success: false as const, error: appError.message }
+    }
+    try {
+      if (statSync(filePath).size > REPLY_IMAGE_MAX_BYTES) {
+        const appError = errorForRenderer('Images must be 5 MB or smaller')
+        return { success: false as const, error: appError.message }
+      }
+      const data = readFileSync(filePath)
+      return { success: true as const, dataUrl: `data:${mime};base64,${data.toString('base64')}` }
+    } catch {
+      const appError = errorForRenderer('Image could not be read')
+      return { success: false as const, error: appError.message }
+    }
+  })
+
   ipcMain.handle('get:media', (_event, filename: string) => {
     if (basename(filename) !== filename) {
       const appError = errorForRenderer('Invalid filename')
@@ -21,26 +65,33 @@ export function registerMediaHandlers(): void {
 
   ipcMain.handle('link:preview', async (_event, url: string) => {
     if (!/^https?:\/\//i.test(url)) {
-      const appError = errorForRenderer('Invalid URL')
-      return { success: false, error: appError.message, appError }
+      return { success: false, data: { url, title: '', description: '', image: '' } }
     }
     try {
+      // 5-second hard timeout so slow/dead external sites don't hang and throw ETIMEDOUT
       const res = await fetch(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         },
+        signal: AbortSignal.timeout(5000),
       })
+      
+      if (!res.ok) {
+        return { success: false, data: { url, title: '', description: '', image: '' } }
+      }
+
       const html = await res.text()
       const pick = (...patterns: RegExp[]) => patterns.map(pattern => html.match(pattern)?.[1]?.trim()).find(Boolean) || ''
       const decode = (value: string) => value.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>')
       const title = decode(pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i, /<title[^>]*>([^<]+)<\/title>/i))
       const description = decode(pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']twitter:description["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i))
       const image = decode(pick(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i, /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i))
+      
       return { success: true, data: { url, title, description, image } }
-    } catch (error: any) {
-      const appError = errorForRenderer(error)
-      return { success: false, error: appError.message, appError }
+    } catch {
+      // Gracefully return empty data instead of crashing or logging an AggregateError
+      return { success: false, data: { url, title: '', description: '', image: '' } }
     }
   })
 }

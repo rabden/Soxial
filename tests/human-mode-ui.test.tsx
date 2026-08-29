@@ -82,18 +82,19 @@ describe('Human Mode UI — window API / component seam', () => {
     expect((screen.getByRole('button', { name: /human/i }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('renders the HumanPage tab bar, switches tabs, and locks tabs when disabled', async () => {
-    const onTabChange = vi.fn()
-    const { rerender } = render(<HumanPage activeTab="feed" onTabChange={onTabChange} />)
-    expect(await screen.findByText('No posts yet')).toBeTruthy()
+  it('renders HumanPage content for the active tab without its own top bar', async () => {
+    const { rerender } = render(<HumanPage activeTab="feed" onTabChange={vi.fn()} />)
+    // Both For you / Following lists stay mounted (keep-alive) — one visible,
+    // one hidden — so the empty copy exists for each sub-tab.
+    expect((await screen.findAllByText('No posts yet')).length).toBeGreaterThanOrEqual(1)
+    // Navigation now lives in the Sidebar — HumanPage should not render the top tab bar
+    expect(screen.queryByRole('button', { name: /^bookmarks$/i })).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: /bookmarks/i }))
-    expect(onTabChange).toHaveBeenCalledWith('bookmarks')
-
-    rerender(<HumanPage activeTab="bookmarks" onTabChange={onTabChange} />)
+    rerender(<HumanPage activeTab="bookmarks" onTabChange={vi.fn()} />)
     expect(await screen.findByText('No bookmarks')).toBeTruthy()
 
-    rerender(<HumanPage activeTab="bookmarks" onTabChange={onTabChange} disabled />)
-    expect((screen.getByRole('button', { name: /search/i }) as HTMLButtonElement).disabled).toBe(true)
+    // disabled prop still renders content (no top-bar to lock)
+    rerender(<HumanPage activeTab="bookmarks" disabled />)
+    expect(await screen.findByText('No bookmarks')).toBeTruthy()
   })
 })

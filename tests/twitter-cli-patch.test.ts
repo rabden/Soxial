@@ -99,12 +99,98 @@ class TwitterClient:
             except Exception as exc:
                 logger.debug("Failed to generate transaction id: %s", exc)
         return headers
+
+    def fetch_user_tweets(self, user_id, count=20):
+        # type: (str, int) -> List[Tweet]
+        """Fetch tweets posted by a user."""
+        return self._fetch_timeline(
+            "UserTweets",
+            count,
+            lambda data: _deep_get(data, "data", "user", "result", "timeline_v2", "timeline", "instructions"),
+            extra_variables={},
+        )
+
+    def fetch_home_timeline(self, count=20):
+        # type: (int) -> List[Tweet]
+        """Fetch home timeline tweets."""
+        return self._fetch_timeline(
+            "HomeTimeline",
+            count,
+            lambda data: _deep_get(data, "data", "home", "home_timeline_urt", "instructions"),
+        )
+
+    def fetch_following_feed(self, count=20):
+        # type: (int) -> List[Tweet]
+        """Fetch chronological following feed."""
+        return self._fetch_timeline(
+            "HomeLatestTimeline",
+            count,
+            lambda data: _deep_get(data, "data", "home", "home_timeline_urt", "instructions"),
+        )
+
+    def _fetch_timeline(self, operation_name, count, get_instructions, extra_variables=None, override_base_variables=False, field_toggles=None):
+        # type: (str, int, Callable[[Any], Any], Optional[Dict[str, Any]], bool, Optional[Dict[str, Any]]) -> List[Tweet]
+        """Generic timeline fetcher with pagination and deduplication."""
+        tweets = []  # type: List[Tweet]
+        seen_ids = set()  # type: Set[str]
+        cursor = None  # type: Optional[str]
+        attempts = 0
+        max_attempts = int(math.ceil(count / 20.0)) + 2
+
+        while len(tweets) < count and attempts < max_attempts:
+            data = self._graphql_get(operation_name, variables, FEATURES, field_toggles=field_toggles)
+            new_tweets, next_cursor = parse_timeline_response(data, get_instructions)
+
+            if not next_cursor:
+                break
+            if next_cursor == cursor:
+                logger.debug("Timeline pagination stopped because cursor did not advance: %s", next_cursor)
+                break
+            cursor = next_cursor
+
+        return tweets[:count]
+
+    def _fetch_user_list(self, operation_name, user_id, count, get_instructions):
+        pass
 `
 
-function fixturePath(source: string = FIXTURE): string {
+/** The exact cli.py feed regions layer K anchors on (0.8.5 shape). */
+const CLI_FIXTURE = `import click
+from .output import emit_structured, success_payload
+from .serialization import tweets_to_data
+
+
+@click.command()
+@click.option("--full-text", is_flag=True, help="Show full tweet text in table output.")
+@click.pass_context
+def feed(ctx, feed_type, max_count, as_json, as_yaml, input_file, output_file, do_filter, full_text):
+    # type: (Any, str, Optional[int], bool, bool, Optional[str], Optional[str], bool, bool) -> None
+    """Fetch home timeline with optional filtering."""
+    compact = ctx.obj.get("compact", False)
+    config = load_config()
+    try:
+            if feed_type == "following":
+                tweets = client.fetch_following_feed(fetch_count)
+            else:
+                tweets = client.fetch_home_timeline(fetch_count)
+    except (TwitterError, RuntimeError) as exc:
+        _exit_with_error(exc)
+
+    filtered = _apply_filter(tweets, do_filter, config, rich_output=rich_output)
+
+    save_tweet_cache(filtered)
+
+    if emit_structured(tweets_to_data(filtered), as_json=as_json, as_yaml=as_yaml):
+        return
+
+    title = "👥 Following" if feed_type == "following" else "📱 Twitter"
+`
+
+function fixturePath(source: string = FIXTURE, cliSource?: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'soxial-cli-patch-test-'))
   const file = join(dir, 'client.py')
   writeFileSync(file, source, 'utf8')
+  if (cliSource !== undefined) writeFileSync(join(dir, 'cli.py'), cliSource, 'utf8')
   return file
 }
 
@@ -138,7 +224,12 @@ describe('patch-twitter-cli.cjs (#45)', () => {
     )
     // D: redacted presence log (boolean only, never the value)
     expect(patched).toContain('logger.debug("x-client-transaction-id available=%s", bool(self._client_transaction))')
-    expect(patched).not.toMatch(/logger\.\w+\(.*generate_transaction_id\(.*\)\s*\)/s)
+    // No logger call may interpolate the generated transaction id value
+    // (single-line scope — the value would appear inside the call's args).
+    expect(patched).not.toMatch(/logger\.\w+\([^)\n]*generate_transaction_id/)
+
+    // G: fetch_user_tweets reads the current timeline shape
+    expect(patched).toContain('_deep_get(data, "data", "user", "result", "timeline", "timeline", "instructions")')
   })
 
   it('is idempotent — a second run is a no-op', () => {
@@ -146,7 +237,8 @@ describe('patch-twitter-cli.cjs (#45)', () => {
     applyTwitterCliPatch({ clientPy: file })
     const result = applyTwitterCliPatch({ clientPy: file })
 
-    expect(result).toMatchObject({ ok: true, patched: false, reason: 'already patched' })
+    expect(result).toMatchObject({ ok: true, patched: false })
+    expect(result.reason).toContain('already patched')
   })
 
   it('fails loudly when the anchor block drifted upstream', () => {
@@ -177,7 +269,8 @@ describe('patch-twitter-cli.cjs (#45)', () => {
 
     applyTwitterCliPatch({ clientPy: pristine })
     const patched = applyTwitterCliPatch({ clientPy: pristine, checkOnly: true })
-    expect(patched).toMatchObject({ ok: true, patched: false, reason: 'already patched' })
+    expect(patched).toMatchObject({ ok: true, patched: false })
+    expect(patched.reason).toContain('already patched')
     expect(patched.checkFailed).toBeUndefined()
   })
 
@@ -193,5 +286,58 @@ describe('patch-twitter-cli.cjs (#45)', () => {
     // Applied / already patched / clean check → success.
     expect(cliExitCode({ ok: true, patched: true })).toBe(0)
     expect(cliExitCode({ ok: true, patched: false, reason: 'already patched' })).toBe(0)
+  })
+
+  it('K: backports feed cursor pagination to client.py and cli.py (0.8.5 base)', () => {
+    const file = fixturePath(FIXTURE, CLI_FIXTURE)
+    const result = applyTwitterCliPatch({ clientPy: file })
+
+    expect(result.ok).toBe(true)
+    expect(result.reason).toContain('feed-cursor patch applied')
+
+    const client = readFileSync(file, 'utf8')
+    // client.py: cursor plumbing through the timeline fetcher
+    expect(client).toContain('def fetch_home_timeline(self, count=20, cursor=None, return_cursor=False):')
+    expect(client).toContain('start_cursor=cursor,')
+    expect(client).toContain('cursor = start_cursor')
+    expect(client).toContain('continuation_cursor = next_cursor')
+    expect(client).toContain('if return_cursor:')
+    expect(client).toContain('return tweets[:count], continuation_cursor')
+
+    const cli = readFileSync(join(file, '..', 'cli.py'), 'utf8')
+    // cli.py: --cursor option in, pagination.nextCursor out
+    expect(cli).toContain('@click.option("--cursor", type=str, default=None')
+    expect(cli).toContain('def feed(ctx, feed_type, max_count, as_json, as_yaml, input_file, output_file, do_filter, full_text, cursor):')
+    expect(cli).toContain('client.fetch_home_timeline(fetch_count, cursor=cursor, return_cursor=True)')
+    expect(cli).toContain('payload["pagination"] = {"nextCursor": next_cursor}')
+
+    // Idempotent: a second run is a no-op on both files.
+    const again = applyTwitterCliPatch({ clientPy: file })
+    expect(again).toMatchObject({ ok: true, patched: false })
+    expect(again.reason).toContain('feed-cursor: already patched or native')
+  })
+
+  it('K: skips cli.py when upstream ships the cursor feature natively', () => {
+    const nativeCli = CLI_FIXTURE.replace(
+      '@click.pass_context',
+      '@click.option("--cursor", type=str, default=None, help="Pagination cursor for continuing a previous feed request.")\n@click.pass_context',
+    )
+    const file = fixturePath(FIXTURE, nativeCli)
+    const result = applyTwitterCliPatch({ clientPy: file })
+
+    expect(result.ok).toBe(true)
+    expect(result.reason).toContain('feed-cursor: already patched or native')
+  })
+
+  it('K: fails loudly when the cli.py feed anchor drifted upstream', () => {
+    const driftedCli = CLI_FIXTURE.replace(
+      '    if emit_structured(tweets_to_data(filtered), as_json=as_json, as_yaml=as_yaml):',
+      '    if emit_structured_v2(tweets_to_data(filtered), as_json=as_json, as_yaml=as_yaml):',
+    )
+    const file = fixturePath(FIXTURE, driftedCli)
+    const result = applyTwitterCliPatch({ clientPy: file })
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toContain('cli.py feed command anchor not found')
   })
 })

@@ -50,16 +50,50 @@ const MODEL_LABELS: Record<string, string> = {
   'gemini-3.5-flash-lite': CHAT_MODEL,
   'GLM 5.3': 'glm-5.3',
   'glm-5.3': 'glm-5.3',
-  'GLM 5 Turbo': 'glm-5-turbo',
-  'glm-5-turbo': 'glm-5-turbo',
+  'GLM 5.3 Flash': 'glm-5.3-flash',
+  'glm-5.3-flash': 'glm-5.3-flash',
   'GLM 4.7 Flash': 'glm-4.7-flash',
   'glm-4.7-flash': 'glm-4.7-flash',
   'GLM 4.5 Flash': 'glm-4.5-flash',
   'glm-4.5-flash': 'glm-4.5-flash',
+  'GLM 4.6V Flash': 'glm-4.6v-flash',
+  'glm-4.6v-flash': 'glm-4.6v-flash',
+  'GPT-5.6 Luna': 'openai/gpt-5.6-luna',
+  'openai/gpt-5.6-luna': 'openai/gpt-5.6-luna',
+  'GPT-5.6 Sol': 'openai/gpt-5.6-sol',
+  'openai/gpt-5.6-sol': 'openai/gpt-5.6-sol',
+  'GPT-5.6 Terra': 'openai/gpt-5.6-terra',
+  'openai/gpt-5.6-terra': 'openai/gpt-5.6-terra',
+  'GPT-5.5': 'openai/gpt-5.5',
+  'openai/gpt-5.5': 'openai/gpt-5.5',
+  'GPT-5.4 mini': 'openai/gpt-5.4-mini',
+  'openai/gpt-5.4-mini': 'openai/gpt-5.4-mini',
+  'Claude Sonnet 5': 'anthropic/claude-sonnet-5',
+  'anthropic/claude-sonnet-5': 'anthropic/claude-sonnet-5',
+  'Claude Opus 5': 'anthropic/claude-opus-5',
+  'anthropic/claude-opus-5': 'anthropic/claude-opus-5',
+  'Claude Fable 5': 'anthropic/claude-fable-5',
+  'anthropic/claude-fable-5': 'anthropic/claude-fable-5',
 
   // Legacy names kept so stored preferences keep working; ids resolve via normalizeModelId.
   'Gemini 3.6 Flash': 'gemini-3.6-flash',
   'GLM 5.2': 'glm-5.2',
+  'GLM 5 Turbo': 'glm-5-turbo',
+  'glm-5-turbo': 'glm-5.3-flash',
+  'GPT-5.2': 'openai/gpt-5.6-luna',
+  'openai/gpt-5.2': 'openai/gpt-5.6-luna',
+  'GPT-5 mini': 'openai/gpt-5.4-mini',
+  'openai/gpt-5-mini': 'openai/gpt-5.4-mini',
+  'GPT-4.1': 'openai/gpt-5.5',
+  'openai/gpt-4.1': 'openai/gpt-5.5',
+  'GPT-4o': 'openai/gpt-5.6-luna',
+  'openai/gpt-4o': 'openai/gpt-5.6-luna',
+  'Claude Opus 4.1': 'anthropic/claude-opus-5',
+  'anthropic/claude-opus-4-1': 'anthropic/claude-opus-5',
+  'Claude Sonnet 4.5': 'anthropic/claude-sonnet-5',
+  'anthropic/claude-sonnet-4-5': 'anthropic/claude-sonnet-5',
+  'Claude Haiku 4.5': 'anthropic/claude-sonnet-5',
+  'anthropic/claude-haiku-4-5': 'anthropic/claude-sonnet-5',
 }
 
 export const ONBOARDING_MODEL_FALLBACK = ['gemini-3.7-flash', 'gemini-3.5-flash-lite']
@@ -74,9 +108,9 @@ export function getOnboardingFallbackChain(): string[] {
   const hasZhipu = zhipuKeys.count > 0
 
   if (hasGoogle && hasZhipu) {
-    return ['gemini-3.7-flash', 'glm-4.7-flash', 'glm-4.5-flash', 'gemini-3.5-flash-lite']
+    return ['gemini-3.7-flash', 'glm-5.3-flash', 'glm-4.6v-flash', 'gemini-3.5-flash-lite']
   } else if (hasZhipu) {
-    return ['glm-4.7-flash', 'glm-4.5-flash']
+    return ['glm-5.3-flash', 'glm-4.6v-flash']
   } else {
     return ['gemini-3.7-flash', 'gemini-3.5-flash-lite'] // Default Google only
   }

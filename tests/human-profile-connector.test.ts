@@ -14,6 +14,11 @@ vi.mock('../electron/main/cli', () => ({
   ensureTwitterAuth: vi.fn(),
 }))
 
+const rebuildActive = vi.fn(() => false)
+vi.mock('../electron/main/twitter-handle-rebuild', () => ({
+  isTwitterHandleRebuildActive: () => rebuildActive(),
+}))
+
 import { ipcMain } from 'electron'
 import { runTwitterCli, ensureTwitterAuth, type CliResult } from '../electron/main/cli'
 import { normalizeHumanUser, sanitizeIsoDate, toWindowedHumanPage } from '../electron/main/human-connector'
@@ -68,6 +73,20 @@ describe('connector helpers (T4)', () => {
       followers: 12,
       verified: true,
     })
+  })
+
+  it('upgrades low-res X avatar suffixes to the 400x400 variant', () => {
+    const user = normalizeHumanUser({
+      screenName: 'alice',
+      profileImageUrl: 'https://pbs.twimg.com/profile_images/1/abc_normal.jpg',
+    })
+    expect(user?.profileImageUrl).toBe('https://pbs.twimg.com/profile_images/1/abc_400x400.jpg')
+
+    // Already-sized and bare URLs pass through untouched.
+    const sized = normalizeHumanUser({ screenName: 'a', profileImageUrl: 'https://pbs.twimg.com/profile_images/1/abc_400x400.jpg' })
+    expect(sized?.profileImageUrl).toBe('https://pbs.twimg.com/profile_images/1/abc_400x400.jpg')
+    const bare = normalizeHumanUser({ screenName: 'a', profileImageUrl: 'https://x.com/a.png' })
+    expect(bare?.profileImageUrl).toBe('https://x.com/a.png')
   })
 
   it('windowed pages flag hasMore only when the page came back full', () => {
@@ -145,39 +164,39 @@ describe('human:profile handler — connector seam', () => {
 })
 
 describe('human:profilePosts handler — connector seam', () => {
-  it('builds Posts args: search --from <me> --exclude replies with until window', async () => {
+  it('builds Posts args: user-posts (native UserTweets timeline), count-growth', async () => {
     vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
     vi.mocked(runTwitterCli).mockResolvedValue({ ok: true, data: [{ id: '1' }, { id: '2' }] } as CliResult)
 
-    const result = await handlers['human:profilePosts']({}, { subTab: 'posts', until: '2026-08-01' })
+    const result = await handlers['human:profilePosts']({}, { subTab: 'posts', count: 10 })
 
     expect(runTwitterCli).toHaveBeenCalledWith(
-      ['search', '--json', '--from', 'alice', '--exclude', 'replies', '-n', '10', '--until', '2026-08-01'],
+      ['user-posts', 'alice', '--json', '-n', '10'],
       { compact: false, timeoutMs: 30_000 },
     )
     expect(result).toEqual({ ok: true, data: { items: [{ id: '1' }, { id: '2' }], hasMore: false } })
   })
 
-  it('builds Replies args with the filter:replies operator', async () => {
+  it('builds Replies args with the filter:replies operator, Latest product and until window', async () => {
     vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
     vi.mocked(runTwitterCli).mockResolvedValue({ ok: true, data: [] } as CliResult)
 
-    await handlers['human:profilePosts']({}, { subTab: 'replies', count: 5 })
+    await handlers['human:profilePosts']({}, { subTab: 'replies', count: 5, until: '2026-08-01' })
 
     expect(runTwitterCli).toHaveBeenCalledWith(
-      ['search', 'filter:replies', '--json', '--from', 'alice', '-n', '5'],
+      ['search', 'filter:replies', '--json', '-t', 'Latest', '--from', 'alice', '-n', '5', '--until', '2026-08-01'],
       { compact: false, timeoutMs: 30_000 },
     )
   })
 
-  it('marks a full page as having more (date-window heuristic)', async () => {
+  it('marks a full Posts page under the cap as having more (count-growth heuristic)', async () => {
     vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession() as any)
     vi.mocked(runTwitterCli).mockResolvedValue({
       ok: true,
       data: Array.from({ length: 10 }, (_, i) => ({ id: String(i) })),
     } as CliResult)
 
-    const result = await handlers['human:profilePosts']({}, { subTab: 'posts' })
+    const result = await handlers['human:profilePosts']({}, { subTab: 'posts', count: 10 })
     expect(result.data.hasMore).toBe(true)
   })
 
@@ -191,9 +210,9 @@ describe('human:profilePosts handler — connector seam', () => {
     expect(runTwitterCli).not.toHaveBeenCalled()
 
     vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
-    await handlers['human:profilePosts']({}, { subTab: 'posts', until: 'garbage' })
+    await handlers['human:profilePosts']({}, { subTab: 'replies', until: 'garbage' })
     expect(runTwitterCli).toHaveBeenCalledWith(
-      ['search', '--json', '--from', 'alice', '--exclude', 'replies', '-n', '10'],
+      ['search', 'filter:replies', '--json', '-t', 'Latest', '--from', 'alice', '-n', '10'],
       { compact: false, timeoutMs: 30_000 },
     )
   })
@@ -210,5 +229,80 @@ describe('human:profilePosts handler — connector seam', () => {
     const result = await handlers['human:profilePosts']({}, { subTab: 'posts' })
     expect(result.ok).toBe(false)
     expect(result.error.category).toBe('rate-limit')
+  })
+})
+
+describe('human:reply handler — connector seam', () => {
+  it('builds reply args: reply <id> <text> --json with images', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    vi.mocked(runTwitterCli).mockResolvedValue({
+      ok: true,
+      data: { success: true, action: 'reply', id: '999', replyTo: '123', url: 'https://x.com/i/status/999' },
+    } as CliResult)
+
+    const result = await handlers['human:reply']({}, {
+      tweetId: '123',
+      text: 'my reply',
+      imagePaths: ['/tmp/a.png', '/tmp/b.png'],
+    })
+
+    expect(runTwitterCli).toHaveBeenCalledWith(
+      ['reply', '123', 'my reply', '--json', '-i', '/tmp/a.png', '-i', '/tmp/b.png'],
+      { compact: false, timeoutMs: 30_000 },
+    )
+    expect(result).toEqual({
+      ok: true,
+      data: { tweetId: '999', replyTo: '123', url: 'https://x.com/i/status/999' },
+    })
+  })
+
+  it('validates tweet id, text length and image paths before invoking the CLI', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    vi.mocked(runTwitterCli).mockResolvedValue({ ok: true, data: null } as CliResult)
+
+    const badId = await handlers['human:reply']({}, { tweetId: 'abc', text: 'hi' })
+    expect(badId.ok).toBe(false)
+    expect(badId.error.category).toBe('validation')
+
+    const emptyText = await handlers['human:reply']({}, { tweetId: '123', text: '   ' })
+    expect(emptyText.ok).toBe(false)
+    expect(emptyText.error.category).toBe('validation')
+
+    const longText = await handlers['human:reply']({}, { tweetId: '123', text: 'x'.repeat(25_001) })
+    expect(longText.ok).toBe(false)
+
+    const flagPath = await handlers['human:reply']({}, { tweetId: '123', text: 'hi', imagePaths: ['-rf'] })
+    expect(flagPath.ok).toBe(false)
+    expect(runTwitterCli).not.toHaveBeenCalled()
+  })
+
+  it('gates on session and the rebuild lock before writing', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(
+      { ok: false, data: null, error: 'no cookies', errorCode: 'not_authenticated' } as CliResult,
+    )
+    const noSession = await handlers['human:reply']({}, { tweetId: '123', text: 'hi' })
+    expect(noSession.ok).toBe(false)
+    expect(noSession.error.category).toBe('auth')
+
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    rebuildActive.mockReturnValue(true)
+    const locked = await handlers['human:reply']({}, { tweetId: '123', text: 'hi' })
+    expect(locked.ok).toBe(false)
+    expect(runTwitterCli).not.toHaveBeenCalled()
+    rebuildActive.mockReturnValue(false)
+  })
+
+  it('maps connector errors through the typed model', async () => {
+    vi.mocked(ensureTwitterAuth).mockResolvedValue(authedSession('alice') as any)
+    vi.mocked(runTwitterCli).mockResolvedValue({
+      ok: false,
+      data: null,
+      error: 'You attempted to reply to a Tweet that is deleted',
+      errorCode: 'api_error',
+    } as CliResult)
+
+    const result = await handlers['human:reply']({}, { tweetId: '123', text: 'hi' })
+    expect(result.ok).toBe(false)
+    expect(result.error.category).toBe('internal')
   })
 })

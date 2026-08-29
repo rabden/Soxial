@@ -14,17 +14,36 @@ describe('normalizeModelId', () => {
   it('maps each legacy id onto its current equivalent', () => {
     expect(normalizeModelId('gemini-3.6-flash')).toBe('gemini-3.7-flash')
     expect(normalizeModelId('glm-5.2')).toBe('glm-5.3')
+    expect(normalizeModelId('glm-5-turbo')).toBe('glm-5.3-flash')
+    expect(normalizeModelId('openai/gpt-5.2')).toBe('openai/gpt-5.6-luna')
+    expect(normalizeModelId('openai/gpt-4o')).toBe('openai/gpt-5.6-luna')
+    expect(normalizeModelId('anthropic/claude-opus-4-1')).toBe('anthropic/claude-opus-5')
   })
 
   it('passes through unknown and current ids unchanged', () => {
     expect(normalizeModelId('gemini-3.7-flash')).toBe('gemini-3.7-flash')
     expect(normalizeModelId('glm-5.3')).toBe('glm-5.3')
+    expect(normalizeModelId('glm-5.3-flash')).toBe('glm-5.3-flash')
+    expect(normalizeModelId('openai/gpt-5.6-luna')).toBe('openai/gpt-5.6-luna')
     expect(normalizeModelId('some-future-model')).toBe('some-future-model')
     expect(normalizeModelId('')).toBe('')
   })
 
   it('keeps LEGACY_MODEL_IDS scoped to documented renames', () => {
-    expect(Object.keys(LEGACY_MODEL_IDS).sort()).toEqual(['gemini-3.6-flash', 'glm-5.2'])
+    expect(Object.keys(LEGACY_MODEL_IDS).sort()).toEqual(
+      [
+        'anthropic/claude-haiku-4-5',
+        'anthropic/claude-opus-4-1',
+        'anthropic/claude-sonnet-4-5',
+        'gemini-3.6-flash',
+        'glm-5.2',
+        'glm-5-turbo',
+        'openai/gpt-4.1',
+        'openai/gpt-4o',
+        'openai/gpt-5-mini',
+        'openai/gpt-5.2',
+      ].sort(),
+    )
   })
 })
 
@@ -39,8 +58,13 @@ describe('parseModelRef', () => {
   })
 
   it('splits hosted provider namespaces', () => {
-    expect(parseModelRef('openai/gpt-4o')).toEqual({ kind: 'openai', modelId: 'gpt-4o' })
-    expect(parseModelRef('anthropic/claude-sonnet-4-5')).toEqual({ kind: 'anthropic', modelId: 'claude-sonnet-4-5' })
+    expect(parseModelRef('openai/gpt-5.6-luna')).toEqual({ kind: 'openai', modelId: 'gpt-5.6-luna' })
+    expect(parseModelRef('anthropic/claude-sonnet-5')).toEqual({ kind: 'anthropic', modelId: 'claude-sonnet-5' })
+  })
+
+  it('normalizes legacy hosted ids to current catalog ids', () => {
+    expect(parseModelRef('openai/gpt-4o').modelId).toBe('gpt-5.6-luna')
+    expect(parseModelRef('anthropic/claude-opus-4-1').modelId).toBe('claude-opus-5')
   })
 
   it('splits custom provider ids, keeping the model id intact', () => {

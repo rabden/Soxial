@@ -65,9 +65,10 @@ export default function HumanBookmarks() {
           />
         )}
 
-        {list.items.map((tweet) => (
-          <TweetCard key={tweet.id} variant="feed" {...parseTweetData(tweet)} />
-        ))}
+        {list.items.map((tweet) => {
+          const data = parseTweetData(tweet)
+          return <TweetCard key={tweet.id} variant="feed" {...data} isBookmarked />
+        })}
 
         {list.moreError && (
           <div className="p-4">

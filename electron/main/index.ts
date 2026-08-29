@@ -182,7 +182,27 @@ function createWindow() {
     logger.error('main', `renderer process exited: ${details.reason} (${details.exitCode})`)
   })
 
-  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+  // Electron 30+ deprecates the 5-arg signature: use Event<WebContentsConsoleMessageEventParams>
+  mainWindow.webContents.on('console-message' as any, (...args: any[]) => {
+    let level: number
+    let message: string
+    let line: number
+    let sourceId: string
+    if (args.length === 2 && args[1] && typeof args[1] === 'object' && 'message' in args[1]) {
+      const details = args[1] as any
+      level = details.level ?? 0
+      message = details.message ?? ''
+      line = details.lineNumber ?? details.line ?? 0
+      sourceId = details.sourceId ?? ''
+    } else if (args.length >= 5) {
+      // legacy: (event, level, message, line, sourceId)
+      level = args[1] as number
+      message = args[2] as string
+      line = args[3] as number
+      sourceId = args[4] as string
+    } else {
+      return
+    }
     const context = `${sourceId || 'renderer'}:${line}`
     if (level >= 2) logger.error('renderer', `${message} (${context})`)
     else logger.debug('renderer', `${message} (${context})`)
@@ -205,24 +225,45 @@ app.whenReady().then(() => {
 
   // ponytail: Twitter video CDN 403s requests with non-Twitter Referer.
   // Custom protocol proxies through Node.js fetch (no Referer restriction).
+  // The abort ceiling applies to time-to-first-byte ONLY: b72eed3 used
+  // AbortSignal.timeout(8000), which in undici's fetch governs the whole
+  // transfer — multi-MB mp4s regularly exceed 8s mid-stream, so the signal
+  // severed the body while Chromium was consuming it and every such video
+  // surfaced as "Video failed to load" (a reload usually rode a faster path
+  // and worked). Headers must land inside 15s; the body itself streams
+  // without a deadline.
   protocol.handle('twimg', async (request) => {
     const actualUrl = request.url.replace(/^twimg:\/\//, 'https://')
     const range = request.headers.get('range')
-    const res = await fetch(actualUrl, {
-      headers: {
-        'Referer': 'https://x.com/',
-        'Origin': 'https://x.com',
-        ...(range ? { Range: range } : {}),
+    const controller = new AbortController()
+    const ttfbTimer = setTimeout(() => controller.abort(), 15_000)
+    try {
+      const res = await fetch(actualUrl, {
+        headers: {
+          'Referer': 'https://x.com/',
+          'Origin': 'https://x.com',
+          ...(range ? { Range: range } : {}),
+        },
+        redirect: 'follow',
+        signal: controller.signal,
+      })
+      clearTimeout(ttfbTimer)
+      if (res.status >= 400) {
+        logger.warn('main', `twimg proxy: upstream ${res.status} for ${actualUrl.slice(0, 140)}`)
       }
-    })
-    const headers = new Headers()
-    for (const name of ['accept-ranges', 'content-length', 'content-range', 'content-type']) {
-      const value = res.headers.get(name)
-      if (value) headers.set(name, value)
+      const headers = new Headers()
+      for (const name of ['accept-ranges', 'content-length', 'content-range', 'content-type']) {
+        const value = res.headers.get(name)
+        if (value) headers.set(name, value)
+      }
+      if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream')
+      headers.set('Access-Control-Allow-Origin', '*')
+      return new Response(res.body, { status: res.status, headers })
+    } catch (err) {
+      clearTimeout(ttfbTimer)
+      logger.warn('main', `twimg proxy failed for ${actualUrl.slice(0, 140)}: ${err instanceof Error ? err.message : String(err)}`)
+      return new Response(null, { status: 504 })
     }
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/octet-stream')
-    headers.set('Access-Control-Allow-Origin', '*')
-    return new Response(res.body, { status: res.status, headers })
   })
 
   getDb()

@@ -13,6 +13,7 @@ import { PromptInput } from "src/components/ui/prompt-input";
 import { PostAttachments } from "src/components/ui/post-attachment";
 import { PanelLeft } from "lucide-react";
 import { AppLogo } from "src/components/ui/app-logo";
+import { cn } from "src/lib/utils";
 import Sidebar, { View, SettingsSection } from "src/components/Sidebar";
 import ScheduledPosts from "src/components/ScheduledPosts";
 import ProfileView from "src/components/Profile";
@@ -1077,19 +1078,24 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
               setView("chat");
             }}
           />
-        ) : mode === "human" ? (
-          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-sm text-zinc-500">Loading Human View...</div>}>
-            <div data-mode="human" className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-black">
-              <HumanPage
-                activeTab={humanTab}
-                onTabChange={setHumanTab}
-                disabled={profileRebuilding}
-              />
-            </div>
-          </Suspense>
         ) : (
           <>
-            {onMainScreen ? (
+            {/* Human Workspace (Kept mounted) */}
+            <div className={cn("flex-1 flex-col min-w-0 h-full overflow-hidden", mode === "human" ? "flex" : "hidden")}>
+              <Suspense fallback={<div className="flex-1 flex items-center justify-center text-sm text-zinc-500">Loading Human View...</div>}>
+                <div data-mode="human" className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-black">
+                  <HumanPage
+                    activeTab={humanTab}
+                    onTabChange={setHumanTab}
+                    disabled={profileRebuilding}
+                  />
+                </div>
+              </Suspense>
+            </div>
+
+            {/* Agent Chat Workspace (Kept mounted) */}
+            <div className={cn("flex-1 flex-col min-w-0 h-full overflow-hidden relative", mode === "agent" ? "flex" : "hidden")}>
+              {onMainScreen ? (
               <MainScreen
                 suggestions={quickActions}
                 onSend={(text, model, effort) => send(text, model, effort)}
@@ -1248,6 +1254,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                   onEffortChange={(effort) => setSelectedEffort(effort)}
                 />
               </div>
+            </div>
             </div>
           </>
         )}

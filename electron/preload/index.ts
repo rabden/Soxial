@@ -4,6 +4,7 @@ import type {
   HumanFeedRequest,
   HumanFollowListRequest,
   HumanProfilePostsRequest,
+  HumanReplyDraftRequest,
   HumanSearchRequest,
 } from '../../src/features/human/types'
 
@@ -45,6 +46,17 @@ const api = {
   humanFollowList: (request: HumanFollowListRequest) => ipcRenderer.invoke('human:followList', request),
   humanFollowAction: (request: { handle: string; action: 'follow' | 'unfollow' }) =>
     ipcRenderer.invoke('human:followAction', request),
+  humanLike: (request: { tweetId: string; action: 'like' | 'unlike' }) => ipcRenderer.invoke('human:like', request),
+  humanRetweet: (request: { tweetId: string; action: 'retweet' | 'unretweet' }) => ipcRenderer.invoke('human:retweet', request),
+  humanBookmark: (request: { tweetId: string; action: 'bookmark' | 'unbookmark' }) => ipcRenderer.invoke('human:bookmark', request),
+  humanReply: (request: { tweetId: string; text: string; imagePaths?: string[] }) =>
+    ipcRenderer.invoke('human:reply', request),
+  /** One-shot AI reply draft for the Human composer (never posts). */
+  humanReplyDraft: (request: HumanReplyDraftRequest) => ipcRenderer.invoke('human:replyDraft', request),
+  /** Native multi-select image picker — resolves absolute paths in main. */
+  pickReplyImages: () => ipcRenderer.invoke('dialog:pickImages'),
+  /** Read a picked image as a data URL for <img> previews (≤5MB, jpg/png/gif/webp). */
+  mediaDataUrl: (filePath: string) => ipcRenderer.invoke('media:dataUrl', filePath),
   humanSearch: (request: HumanSearchRequest) => ipcRenderer.invoke('human:search', request),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),

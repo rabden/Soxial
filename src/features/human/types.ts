@@ -30,7 +30,12 @@ export interface HumanTweetAuthor {
 export interface HumanQuotedTweet {
   id: string
   text: string
-  author?: { screenName: string; name: string }
+  author?: { screenName: string; name: string; profileImageUrl?: string; verified?: boolean }
+  media?: Array<{ type: string; url: string; width?: number; height?: number }>
+  urls?: string[]
+  createdAtISO?: string
+  createdAt?: string
+  createdAtLocal?: string
 }
 
 /** Full-mode tweet object from the connector (count keys under `metrics.*`). */
@@ -50,6 +55,11 @@ export interface HumanTweet {
   retweetedBy?: string | null
   quotedTweet?: HumanQuotedTweet | null
   lang?: string
+  /** Present on Profile Posts — the pinned tweet lands first (X convention). */
+  pinned?: boolean
+  /** Viewer state: the signed-in user already liked/retweeted this tweet. */
+  liked?: boolean
+  retweeted?: boolean
 }
 
 /** Full-mode user object (count keys `followers`/`following`/`tweets`). */
@@ -131,3 +141,46 @@ export interface HumanSearchRequest {
 }
 
 export type HumanFollowActionResult = HumanResult<{ handle: string; following: boolean }>
+
+/* ------------------------------------------------------------------ *
+ * One-shot AI reply drafting (Human composer).                        *
+ * ------------------------------------------------------------------ */
+
+/** Media item as seen by the drafter — connector/attachment types normalized. */
+export interface HumanReplyDraftMediaItem {
+  /** 'photo' | 'video' | 'animated_gif' | 'gif' | 'link' (gif aliases animated_gif). */
+  type: string
+  url: string
+}
+
+export interface HumanReplyDraftRequest {
+  tweetId: string
+  authorHandle?: string
+  authorName?: string
+  content?: string
+  /** Native attachments of the target tweet (renderer fast-path + context). */
+  media?: HumanReplyDraftMediaItem[]
+  /** The quote layer, when the target tweet quotes another post. */
+  quoted?: {
+    id?: string
+    authorHandle?: string
+    text?: string
+    media?: HumanReplyDraftMediaItem[]
+  } | null
+  /** Effective composer limit (280, or 25 000 for verified/Premium). */
+  charLimit?: number
+  /** Optional user steer, e.g. "keep it short", "push back gently". */
+  instruction?: string
+  /** Prior drafts for this composer — regeneration must vary. */
+  previousDrafts?: string[]
+}
+
+export interface HumanReplyDraftResult {
+  /** Draft text — absent when refused. */
+  text?: string
+  archetype?: string
+  /** One line: what value the reply adds / why this angle. */
+  why?: string
+  /** Set when the drafter declines (native video, substance-is-video quote…). */
+  refused?: { reason: string }
+}

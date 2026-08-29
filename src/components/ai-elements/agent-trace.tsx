@@ -286,11 +286,12 @@ export function NestedReasoningBlock({
 
       <div
         className={cn(
-          "grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+          "grid transition-[grid-template-rows,opacity] duration-300",
           expanded
             ? "grid-rows-[1fr] opacity-100"
             : "grid-rows-[0fr] opacity-0 pointer-events-none"
         )}
+        style={{ transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
       >
         <div className="min-h-0 overflow-hidden">
           <div className="mt-1 mb-1.5 ml-2.5 border-l border-border/70 py-0.5 pl-2.5">
@@ -445,11 +446,12 @@ function TracePillRow({ node, isActive, registry }: TracePillRowProps) {
       {hasDetails && (
         <div
           className={cn(
-            "grid transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]",
+            "grid transition-[grid-template-rows,opacity] duration-300",
             open
               ? "grid-rows-[1fr] opacity-100"
               : "grid-rows-[0fr] opacity-0 pointer-events-none"
           )}
+          style={{ transitionTimingFunction: "cubic-bezier(0.23, 1, 0.32, 1)" }}
         >
           <div className="min-h-0 overflow-hidden">
             <div className="mt-1 mb-1.5 ml-2.5 flex flex-col gap-1 border-l border-border/70 py-0.5 pl-2.5">
