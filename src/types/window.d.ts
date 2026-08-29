@@ -67,6 +67,12 @@ interface Window {
     deleteSession: (sessionId: number) => Promise<any>
     generateTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>
     getSessionSummary: (sessionId: number) => Promise<string | null>
+    contextState: (sessionId: number, model?: string) => Promise<{
+      contextTokens: number | null
+      contextWindow: number
+      usableTokens: number
+      compacted: boolean
+    }>
     reTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>
     generateQuickActions: () => Promise<any>
     getMedia: (filename: string) => Promise<any>

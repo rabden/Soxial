@@ -103,6 +103,7 @@ const api = {
   generateTitle: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:generateTitle', sessionId, messages),
 
   getSessionSummary: (sessionId: number) => ipcRenderer.invoke('chat:getSessionSummary', sessionId),
+  contextState: (sessionId: number, model?: string) => ipcRenderer.invoke('chat:contextState', sessionId, model),
   reTitle: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:reTitle', sessionId, messages),
   generateQuickActions: () => ipcRenderer.invoke('chat:generateQuickActions'),
   getMedia: (filename: string) => ipcRenderer.invoke('get:media', filename),

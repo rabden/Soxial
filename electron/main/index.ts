@@ -3,10 +3,12 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
-import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
+import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, getChatSessionContextTokens, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
-import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
+import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTitleModel, getQuickActionModel, getUtilityModel } from './agent'
+import { getModelWindow } from './models'
+import { usableWindowTokens } from './context-budget'
 import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
 import { logger } from './log'
 import { initPuterAuthHost } from './puter-auth'
@@ -1546,6 +1548,20 @@ function setupIpc() {
 
   ipcMain.handle('chat:getSessionSummary', (_e, sessionId: number) => {
     return getChatSessionContextSummary(sessionId)
+  })
+
+  // Live context state for the renderer's gauge (ticket #59). The token
+  // snapshot is persisted by the agent runtime after each run; the window
+  // comes from the catalog entry of the session's selected model.
+  ipcMain.handle('chat:contextState', (_e, sessionId: number, model?: string) => {
+    const contextTokens = getChatSessionContextTokens(sessionId)
+    const window = getModelWindow(model || getUtilityModel())
+    return {
+      contextTokens,
+      contextWindow: window.contextWindow,
+      usableTokens: usableWindowTokens(window),
+      compacted: !!getChatSessionContextSummary(sessionId),
+    }
   })
 
   ipcMain.handle('chat:reTitle', async (_e, sessionId: number, messages: { role: string; content: string }[]) => {

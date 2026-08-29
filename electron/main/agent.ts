@@ -1125,7 +1125,9 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
       modelId,
       priorSummary: getChatSessionContextSummary(sessionId),
       // Compaction model (ticket #56): the fallback chain's head — the same
-      // utility selection titles and quick actions already use.
+      // utility selection titles and quick actions already use. Chunk sizing
+      // follows ITS window, not the session model's.
+      summarizerWindow: getModelWindow(fallbackChain[0] || 'gemini-3.5-flash-lite'),
       summarize: (req) => generateText([{ role: 'user', content: req.user }], req.system),
     })
     if (!outcome) {
@@ -1149,7 +1151,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     // The refreshed snapshot now covers the appended messages too — counting
     // them again would double-charge the next gate estimate.
     appendedSinceLastResponse = []
-    logger.info('agent', `compacted ${currentMessages.length} → ${compactedMessages.length} model messages (${outcome.tailUserCount} user turns kept verbatim)`)
+    logger.info('agent', `compacted ${currentMessages.length} → ${compactedMessages.length} model messages (${outcome.tailUserCount} user turns kept verbatim, ${outcome.chunkCount} summarizer pass(es))`)
     return compactedMessages
   }
 
