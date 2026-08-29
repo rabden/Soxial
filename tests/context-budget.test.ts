@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CHARS_PER_TOKEN,
-  COMPACTION_THRESHOLD_RATIO,
-  DEFAULT_MODEL_WINDOW,
+  COMPACTION_THRESHOLD_TOKENS,
   IMAGE_TOKEN_ESTIMATE,
   OUTPUT_RESERVE_CAP,
   TAIL_BUDGET_MAX_TOKENS,
@@ -77,25 +76,24 @@ describe('estimateContextTokens', () => {
 
 describe('usableWindowTokens', () => {
   it('reserves the smaller of the output reserve cap and max output', () => {
-    expect(usableWindowTokens({ contextWindow: 1_000_000, maxOutputTokens: 128_000 }))
-      .toBe(1_000_000 - OUTPUT_RESERVE_CAP)
-    expect(usableWindowTokens({ contextWindow: 131_072, maxOutputTokens: 8_192 }))
-      .toBe(131_072 - 8_192)
+    expect(usableWindowTokens({ contextWindow: 200_000, maxOutputTokens: 128_000 }))
+      .toBe(200_000 - OUTPUT_RESERVE_CAP)
+    expect(usableWindowTokens({ contextWindow: 200_000, maxOutputTokens: 8_192 }))
+      .toBe(200_000 - 8_192)
   })
 })
 
 describe('compactionThresholdTokens', () => {
-  it('is 85% of the usable window (grok-build high-water mark)', () => {
-    expect(COMPACTION_THRESHOLD_RATIO).toBe(0.85)
-    const win = { contextWindow: 1_000_000, maxOutputTokens: 64_000 }
-    expect(compactionThresholdTokens(win)).toBe(Math.floor(0.85 * (1_000_000 - OUTPUT_RESERVE_CAP)))
+  it('is the flat, absolute 180k compaction line (owner decision)', () => {
+    expect(COMPACTION_THRESHOLD_TOKENS).toBe(180_000)
+    expect(compactionThresholdTokens()).toBe(180_000)
   })
 })
 
 describe('tailBudgetTokens', () => {
   it('clamps the preserve-recent share between min and max', () => {
-    // 1M window → 25% of usable far exceeds the cap
-    expect(tailBudgetTokens({ contextWindow: 1_000_000, maxOutputTokens: 128_000 })).toBe(TAIL_BUDGET_MAX_TOKENS)
+    // 200k window → 25% of usable far exceeds the cap
+    expect(tailBudgetTokens({ contextWindow: 200_000, maxOutputTokens: 128_000 })).toBe(TAIL_BUDGET_MAX_TOKENS)
     // 65k window → 25% of usable sits between the clamps
     expect(tailBudgetTokens({ contextWindow: 65_536, maxOutputTokens: 8_192 }))
       .toBe(Math.round(0.25 * (65_536 - 8_192)))
@@ -107,17 +105,17 @@ describe('tailBudgetTokens', () => {
 })
 
 describe('catalog window fields', () => {
-  it('gives every catalog entry a positive context window and max output', () => {
+  it('gives every catalog entry the flat 200k context window', () => {
     for (const catalog of [GOOGLE_MODEL_CATALOG, ZHIPU_MODEL_CATALOG, OPENAI_MODEL_CATALOG, ANTHROPIC_MODEL_CATALOG]) {
       for (const entry of catalog) {
-        expect(entry.contextWindow, entry.id).toBeGreaterThan(0)
+        expect(entry.contextWindow, entry.id).toBe(200_000)
         expect(entry.maxOutputTokens, entry.id).toBeGreaterThan(0)
         expect(entry.maxOutputTokens, entry.id).toBeLessThan(entry.contextWindow)
       }
     }
   })
 
-  it('falls back to conservative defaults for unknown and custom ids', () => {
+  it('falls back to the same flat policy for unknown and custom ids', () => {
     expect(getModelWindow('totally-unknown-model')).toEqual(DEFAULT_MODEL_WINDOW)
     expect(getModelWindow('custom/7/llama-4-maverick')).toEqual(DEFAULT_MODEL_WINDOW)
   })

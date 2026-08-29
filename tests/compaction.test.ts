@@ -359,8 +359,8 @@ describe('compactSessionHistory', () => {
 
 })
 
-// Local helper: glm-5.3 (128k window family) clamps to the same
-// preserve-recent cap as the test window below.
+// Local helper: with the flat 200k window policy every catalog model clamps
+// to the same preserve-recent cap; WIN mirrors that shape.
 import { tailBudgetTokens } from '../electron/main/context-budget'
 function tailBudgetOf(_modelId: string): number {
   return tailBudgetTokens(WIN)

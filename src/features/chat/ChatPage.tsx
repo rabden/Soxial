@@ -118,7 +118,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
   const [inputAreaHeight, setInputAreaHeight] = useState(0);
   const [scrollbarW, setScrollbarW] = useState(6);
   const contextSummaryRef = useRef<string | null>(null);
-  const [contextState, setContextState] = useState<{ usedTokens: number; usableTokens: number; compacted: boolean } | null>(null);
+  const [contextState, setContextState] = useState<{ usedTokens: number; compactsAtTokens: number; compacted: boolean } | null>(null);
   const [quickActions, setQuickActions] = useState<string[]>([]);
   const fetchedQuickActions = useRef(false);
   const quickActionsRequestRef = useRef(0);
@@ -395,7 +395,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     try {
       const state = await window.api.contextState(sid, selectedModel);
       setContextState(state.contextTokens != null
-        ? { usedTokens: state.contextTokens, usableTokens: state.usableTokens, compacted: state.compacted }
+        ? { usedTokens: state.contextTokens, compactsAtTokens: state.compactsAtTokens, compacted: state.compacted }
         : null);
     } catch {
       setContextState(null);

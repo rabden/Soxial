@@ -69,8 +69,7 @@ interface Window {
     getSessionSummary: (sessionId: number) => Promise<string | null>
     contextState: (sessionId: number, model?: string) => Promise<{
       contextTokens: number | null
-      contextWindow: number
-      usableTokens: number
+      compactsAtTokens: number
       compacted: boolean
     }>
     reTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>

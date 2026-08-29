@@ -4,8 +4,11 @@
 // cost, opencode divides stringified requests by CHARS_PER_TOKEN=4 — so a
 // dependency-free estimate is the house standard, and the provider-reported
 // usage captured per response (agent.ts) is the ground truth that makes the
-// estimate a fallback rather than the primary signal. Thresholds are
-// percent-based so one policy spans 128k GLM windows and 1M Gemini windows.
+// estimate a fallback rather than the primary signal.
+//
+// Threshold doctrine (owner decision): flat 200k context windows across all
+// models, with compaction at an absolute 180k-token line — no per-model
+// percentage math.
 
 /** Catalog windows come from models.ts; this module only does math on them. */
 import type { ModelWindow } from './models'
@@ -13,9 +16,12 @@ import type { ModelWindow } from './models'
 export const CHARS_PER_TOKEN = 4
 /** Flat per-image token cost — grok-build's estimator. */
 export const IMAGE_TOKEN_ESTIMATE = 765
-/** High-water mark: compact when estimated context crosses this share of the usable window. */
-export const COMPACTION_THRESHOLD_RATIO = 0.85
-/** Output headroom reserved so the model can still answer after compaction (opencode). */
+/**
+ * Absolute compaction line (owner decision): when the estimated context
+ * reaches this many tokens, compaction runs before the model samples.
+ */
+export const COMPACTION_THRESHOLD_TOKENS = 180_000
+/** Output headroom reserved when sizing summarizer requests. */
 export const OUTPUT_RESERVE_CAP = 20_000
 /** Preserve-recent share of the usable window kept verbatim after compaction (opencode). */
 export const TAIL_BUDGET_RATIO = 0.25
@@ -66,8 +72,9 @@ export function usableWindowTokens(win: ModelWindow): number {
   return Math.max(0, win.contextWindow - Math.min(OUTPUT_RESERVE_CAP, win.maxOutputTokens))
 }
 
-export function compactionThresholdTokens(win: ModelWindow): number {
-  return Math.floor(COMPACTION_THRESHOLD_RATIO * usableWindowTokens(win))
+/** The compaction line: absolute, model-independent (owner decision). */
+export function compactionThresholdTokens(): number {
+  return COMPACTION_THRESHOLD_TOKENS
 }
 
 export function tailBudgetTokens(win: ModelWindow): number {
