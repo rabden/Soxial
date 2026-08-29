@@ -24,6 +24,9 @@ interface Window {
     humanBookmarks: (request: import('../features/human/types').HumanBookmarksRequest) => Promise<import('../features/human/types').HumanResult<import('../features/human/types').Paginated<import('../features/human/types').HumanTweet>>>
     humanFollowList: (request: import('../features/human/types').HumanFollowListRequest) => Promise<import('../features/human/types').HumanResult<import('../features/human/types').Paginated<import('../features/human/types').HumanUser>>>
     humanFollowAction: (request: { handle: string; action: 'follow' | 'unfollow' }) => Promise<import('../features/human/types').HumanFollowActionResult>
+    humanLike: (request: { tweetId: string; action: 'like' | 'unlike' }) => Promise<import('../features/human/types').HumanResult<{ tweetId: string; action: string }>>
+    humanRetweet: (request: { tweetId: string; action: 'retweet' | 'unretweet' }) => Promise<import('../features/human/types').HumanResult<{ tweetId: string; action: string }>>
+    humanBookmark: (request: { tweetId: string; action: 'bookmark' | 'unbookmark' }) => Promise<import('../features/human/types').HumanResult<{ tweetId: string; action: string }>>
     humanSearch: (request: import('../features/human/types').HumanSearchRequest) => Promise<import('../features/human/types').HumanResult<import('../features/human/types').Paginated<import('../features/human/types').HumanTweet>>>
     prepareOnboarding: () => Promise<{ runId: string }>
     runOnboarding: (profileData: Record<string, any>, continueFromMessages?: any[], runId?: string) => Promise<any>

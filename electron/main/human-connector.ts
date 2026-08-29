@@ -202,6 +202,15 @@ export function sanitizeIsoDate(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : value
 }
 
+/** X serves `…_<variant>.jpg` avatars (mini 24 / normal 48 / bigger 73 px).
+ *  Surfaces render up to 112 px CSS (224 px physical) — request the 400×400
+ *  variant so avatars are never upscaled. Leaves already-sized and bare URLs
+ *  (original size) untouched. */
+export function upgradeAvatarUrl(url: string | undefined): string | undefined {
+  if (typeof url !== 'string' || !url) return url
+  return url.replace(/_(mini|normal|bigger)(\.\w+)(\?.*)?$/, '_400x400$2$3')
+}
+
 /** Normalize a connector user dict (`whoami`/`user`) — keeps connector count
  *  keys (followers/following/tweets), aliases `username` → `screenName`. */
 export function normalizeHumanUser(raw: any): {
@@ -235,7 +244,7 @@ export function normalizeHumanUser(raw: any): {
     ...(typeof raw.tweets === 'number' ? { tweets: raw.tweets } : {}),
     ...(typeof raw.likes === 'number' ? { likes: raw.likes } : {}),
     ...(raw.verified === true ? { verified: true } : {}),
-    ...(typeof raw.profileImageUrl === 'string' ? { profileImageUrl: raw.profileImageUrl } : {}),
+    ...(typeof raw.profileImageUrl === 'string' ? { profileImageUrl: upgradeAvatarUrl(raw.profileImageUrl) } : {}),
     ...(typeof raw.createdAt === 'string' ? { createdAt: raw.createdAt } : {}),
     ...(typeof raw.createdAtISO === 'string' ? { createdAtISO: raw.createdAtISO } : {}),
   }

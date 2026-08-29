@@ -27,6 +27,23 @@
  *   F. `client.py` queryId retry now also triggers on `Query` errors
  *      (status 0, message `Query: Unspecified`) so stale fallbacks always
  *      recover via live lookup.
+ *   G. `client.py` fetch_user_tweets reads the current UserTweets response
+ *      shape (`user.result.timeline.timeline.instructions`); the old
+ *      `timeline_v2` path returns "No timeline instructions found" →
+ *      `user-posts` answered an empty list, so Human Profile fell back to
+ *      SearchTimeline (whose `from:` index is incomplete — recent posts
+ *      missing entirely).
+ *   H. Pinned tweets: `parser.py` skips the `TimelinePinEntry` instruction
+ *      (a single `entry`, not in `entries`); `models.py` gains
+ *      `Tweet.pinned` and `serialization.py` emits it, so `user-posts`
+ *      returns the pinned tweet first with `pinned: true`.
+ *   I. Viewer state: `parser.py` reads `legacy.favorited`/`legacy.retweeted`
+ *      (ORing the wrapper and the original for retweets), `models.py` gains
+ *      `Tweet.liked`/`Tweet.retweeted` and `serialization.py` emits them —
+ *      the UI fills the Like/Repost buttons for already-acted-on tweets.
+ *   J. `serialization.py` quotedTweet dict gains media + urls (+ ISO time) so
+ *      the UI can show the quote's own media/og preview when the quoting
+ *      tweet has no attachment of its own (X behavior).
  *
  * Usage: node scripts/patch-twitter-cli.cjs [--check]
  *   --check  exit 1 if the patch is not currently applied (CI guard)
@@ -43,6 +60,10 @@ const { execFileSync } = require('child_process')
 const MARKER = '# SOXIAL-PATCH: authed-transaction v1'
 const MARKER_QIDS = '# SOXIAL-PATCH: queryIds v2'
 const MARKER_RETRY2 = '# SOXIAL-PATCH: query-retry v2'
+const MARKER_USERTWEETS = '# SOXIAL-PATCH: user-tweets-path v1'
+const MARKER_PIN = 'SOXIAL-PATCH: pin-entry v1'
+const MARKER_VIEWER = 'SOXIAL-PATCH: viewer-state v1'
+const MARKER_QUOTE = 'SOXIAL-PATCH: quote-media v1'
 
 /** Resolve the installed twitter-cli's client.py inside its uv tool venv. */
 function resolveClientPy(explicit) {
@@ -160,6 +181,158 @@ const RETRY2_GET_NEW = `            if using_fallback and (exc.status_code in (4
 const RETRY2_POST_OLD = '            if exc.status_code in (404, 422) and using_fallback:'
 const RETRY2_POST_NEW = `            if using_fallback and (exc.status_code in (404, 422) or 'Query' in str(exc)):  # ${MARKER_RETRY2}`
 
+// G: UserTweets response moved from timeline_v2 → timeline; prefer the new
+// shape with the old one as fallback so both CLI builds keep working.
+const USERTWEETS_OLD = '            lambda data: _deep_get(data, "data", "user", "result", "timeline_v2", "timeline", "instructions"),'
+const USERTWEETS_NEW = [
+  `            lambda data: (  # ${MARKER_USERTWEETS}`,
+  '                _deep_get(data, "data", "user", "result", "timeline", "timeline", "instructions")',
+  '                or _deep_get(data, "data", "user", "result", "timeline_v2", "timeline", "instructions")',
+  '            ),',
+].join('\n')
+
+// H: pinned tweets — parser skips TimelinePinEntry; models/serialization expose the flag.
+const PARSER_LOOP_OLD = [
+  '    for instruction in instructions:',
+  `        entries = instruction.get("entries") or instruction.get("moduleItems") or []  # ${MARKER_PIN}`,
+  '        # TimelinePinEntry delivers the pinned tweet in a single `entry` key,',
+  '        # not the `entries` list — without this it is silently dropped.',
+  '        is_pin_instruction = instruction.get("type") == "TimelinePinEntry"',
+  '        if not entries and instruction.get("entry"):',
+  '            entries = [instruction["entry"]]',
+  '        for entry in entries:',
+  '            content = entry.get("content", {})',
+  '            next_cursor = _extract_cursor(content) or next_cursor',
+  '',
+  '            item_content = content.get("itemContent", {})',
+  '            result = _deep_get(item_content, "tweet_results", "result")',
+  '            if result:',
+  '                tweet = parse_tweet_result(result)',
+  '                if tweet:',
+  '                    if is_pin_instruction or _deep_get(item_content, "socialContext", "contextType") == "Pin":',
+  '                        tweet.pinned = True',
+  '                    tweets.append(tweet)',
+].join('\n')
+
+const PARSER_LOOP_NEW = [
+  '    for instruction in instructions:',
+  `        entries = instruction.get("entries") or instruction.get("moduleItems") or []  # ${MARKER_PIN}`,
+  '        # TimelinePinEntry delivers the pinned tweet in a single `entry` key,',
+  '        # not the `entries` list — without this it is silently dropped.',
+  '        is_pin_instruction = instruction.get("type") == "TimelinePinEntry"',
+  '        if not entries and instruction.get("entry"):',
+  '            entries = [instruction["entry"]]',
+  '        for entry in entries:',
+  '            content = entry.get("content", {})',
+  '            next_cursor = _extract_cursor(content) or next_cursor',
+  '',
+  '            item_content = content.get("itemContent", {})',
+  '            result = _deep_get(item_content, "tweet_results", "result")',
+  '            if result:',
+  '                tweet = parse_tweet_result(result)',
+  '                if tweet:',
+  '                    if is_pin_instruction or _deep_get(item_content, "socialContext", "contextType") == "Pin":',
+  '                        tweet.pinned = True',
+  '                    tweets.append(tweet)',
+].join('\n')
+
+const MODELS_OLD = [
+  '    article_title: Optional[str] = None',
+  '    article_text: Optional[str] = None',
+].join('\n')
+const MODELS_NEW = [
+  '    article_title: Optional[str] = None',
+  '    article_text: Optional[str] = None',
+  `    pinned: bool = False  # ${MARKER_PIN}`,
+].join('\n')
+
+const SERIALIZATION_OLD = [
+  '        "lang": tweet.lang,',
+  '        "score": tweet.score,',
+  '    }',
+].join('\n')
+const SERIALIZATION_NEW = [
+  '        "lang": tweet.lang,',
+  '        "score": tweet.score,',
+  `        "pinned": tweet.pinned,  # ${MARKER_PIN}`,
+  '    }',
+].join('\n')
+
+// I: viewer state — liked/retweeted flags (X: `legacy.favorited` /
+// `legacy.retweeted`). Without this the UI cannot fill the Like/Repost
+// buttons for tweets the user already acted on.
+const PARSER_TWEET_KWARGS_OLD = [
+  '        is_retweet=is_retweet,',
+  '        retweeted_by=retweeted_by,',
+].join('\n')
+const PARSER_TWEET_KWARGS_NEW = [
+  '        is_retweet=is_retweet,',
+  `        # Viewer state: whether the signed-in user already liked/retweeted.  # ${MARKER_VIEWER}`,
+  '        # A retweet wrapper carries its own `retweeted` flag while the like',
+  '        # lands on the original tweet — OR both positions.',
+  '        liked=bool(legacy.get("favorited") or actual_legacy.get("favorited")),',
+  '        retweeted=bool(legacy.get("retweeted") or actual_legacy.get("retweeted")),',
+  '        retweeted_by=retweeted_by,',
+].join('\n')
+
+const MODELS_VIEWER_OLD = [
+  `    pinned: bool = False  # ${MARKER_PIN}`,
+].join('\n')
+const MODELS_VIEWER_NEW = [
+  `    pinned: bool = False  # ${MARKER_PIN}`,
+  `    liked: bool = False  # ${MARKER_VIEWER}`,
+  `    retweeted: bool = False  # ${MARKER_VIEWER}`,
+].join('\n')
+
+const SERIALIZATION_VIEWER_OLD = [
+  `        "pinned": tweet.pinned,  # ${MARKER_PIN}`,
+  '    }',
+].join('\n')
+const SERIALIZATION_VIEWER_NEW = [
+  `        "pinned": tweet.pinned,  # ${MARKER_PIN}`,
+  `        "liked": tweet.liked,  # ${MARKER_VIEWER}`,
+  `        "retweeted": tweet.retweeted,  # ${MARKER_VIEWER}`,
+  '    }',
+].join('\n')
+
+// J: quote media — the quoted tweet's dict gains media + urls (+ ISO time) so
+// the UI can render the quote's own preview when the quoting tweet has none.
+const SERIALIZATION_QUOTE_OLD = [
+  '    if tweet.quoted_tweet:',
+  '        data["quotedTweet"] = {',
+  '            "id": tweet.quoted_tweet.id,',
+  '            "text": tweet.quoted_tweet.text,',
+  '            "author": {',
+  '                "screenName": tweet.quoted_tweet.author.screen_name,',
+  '                "name": tweet.quoted_tweet.author.name,',
+  '            },',
+  '        }',
+].join('\n')
+const SERIALIZATION_QUOTE_NEW = [
+  '    if tweet.quoted_tweet:',
+  '        data["quotedTweet"] = {',
+  '            "id": tweet.quoted_tweet.id,',
+  '            "text": tweet.quoted_tweet.text,',
+  '            "author": {',
+  '                "screenName": tweet.quoted_tweet.author.screen_name,',
+  '                "name": tweet.quoted_tweet.author.name,',
+  '            },',
+  `            # ${MARKER_QUOTE} — media + links so the quote can show its own`,
+  '            # preview when the quoting tweet has none of its own.',
+  '            "createdAtISO": format_iso8601(tweet.quoted_tweet.created_at),',
+  '            "media": [',
+  '                {',
+  '                    "type": media.type,',
+  '                    "url": media.url,',
+  '                    "width": media.width,',
+  '                    "height": media.height,',
+  '                }',
+  '                for media in tweet.quoted_tweet.media',
+  '            ],',
+  '            "urls": list(tweet.quoted_tweet.urls),',
+  '        }',
+].join('\n')
+
 // E: fallback IDs refreshed 2026-08-28 from https://raw.githubusercontent.com/fa0311/twitter-openapi/refs/heads/main/src/config/placeholder.json
 const FALLBACK_UPDATES = {
   HomeTimeline: '7zlnp2TxC044W4C1ZUJMHw',
@@ -222,8 +395,51 @@ function applyPatches(source) {
     }
   }
 
+  // G — UserTweets reads the current timeline shape
+  if (!patched.includes(MARKER_USERTWEETS)) {
+    if (!patched.includes(USERTWEETS_OLD)) {
+      return { error: 'client.py no longer contains the fetch_user_tweets timeline_v2 lambda — the CLI may have updated upstream. Review scripts/patch-twitter-cli.cjs anchors.' }
+    }
+    patched = patched.replace(USERTWEETS_OLD, USERTWEETS_NEW)
+    changed = true
+  }
+
   if (!changed) return { source: patched, alreadyPatched: true }
   return { source: patched, alreadyPatched: false }
+}
+
+/** H/I — pinned tweets + viewer state: parser.py + models.py + serialization.py
+ *  (next to client.py). Entries run sequentially: the pin patches land first
+ *  so the viewer-state anchors (which extend the pinned lines) exist. */
+function applyPinnedPatches(dir) {
+  const results = []
+  for (const [file, oldText, newText, marker] of [
+    ['parser.py', PARSER_LOOP_OLD, PARSER_LOOP_NEW, MARKER_PIN],
+    ['models.py', MODELS_OLD, MODELS_NEW, MARKER_PIN],
+    ['serialization.py', SERIALIZATION_OLD, SERIALIZATION_NEW, MARKER_PIN],
+    ['parser.py', PARSER_TWEET_KWARGS_OLD, PARSER_TWEET_KWARGS_NEW, MARKER_VIEWER],
+    ['models.py', MODELS_VIEWER_OLD, MODELS_VIEWER_NEW, MARKER_VIEWER],
+    ['serialization.py', SERIALIZATION_VIEWER_OLD, SERIALIZATION_VIEWER_NEW, MARKER_VIEWER],
+    ['serialization.py', SERIALIZATION_QUOTE_OLD, SERIALIZATION_QUOTE_NEW, MARKER_QUOTE],
+  ]) {
+    const filePath = path.join(dir, file)
+    if (!fs.existsSync(filePath)) {
+      results.push({ file, skipped: 'not found' })
+      continue
+    }
+    const source = fs.readFileSync(filePath, 'utf8')
+    if (source.includes(marker)) {
+      results.push({ file, skipped: 'already patched' })
+      continue
+    }
+    if (!source.includes(oldText)) {
+      results.push({ file, error: `${file} anchor not found — the CLI may have updated upstream` })
+      continue
+    }
+    fs.writeFileSync(filePath, source.replace(oldText, newText), 'utf8')
+    results.push({ file, patched: true })
+  }
+  return results
 }
 
 function applyGraphqlPatch(source) {
@@ -299,6 +515,25 @@ function applyTwitterCliPatch(options = {}) {
     }
   }
 
+  // G/H — UserTweets path (client.py) is applied above via applyPatches;
+  // pinned tweets live in parser/models/serialization next to client.py.
+  const pinDir = path.dirname(clientPy)
+  const pinResults = applyPinnedPatches(pinDir)
+  const pinFailed = pinResults.find((r) => r.error)
+  if (pinFailed) {
+    return { ok: false, patched: false, path: clientPy, reason: pinFailed.error }
+  }
+  const pinChanged = pinResults.some((r) => r.patched)
+  if (pinChanged) {
+    if (options.checkOnly) {
+      return { ok: true, patched: false, reason: 'pinned patches not applied', path: clientPy, checkFailed: true }
+    }
+    totalPatched = true
+    reasons.push('pin patches applied')
+  } else {
+    reasons.push('pin patches already applied')
+  }
+
   // If neither file needed patching, we're already patched
   if (!totalPatched) {
     return { ok: true, patched: false, reason: reasons.join(', '), path: clientPy }
@@ -314,7 +549,7 @@ function cliExitCode(result) {
   return 0
 }
 
-module.exports = { applyTwitterCliPatch, resolveClientPy, cliExitCode, MARKER, _internals: { applyPatches, applyGraphqlPatch } }
+module.exports = { applyTwitterCliPatch, resolveClientPy, cliExitCode, MARKER, MARKER_USERTWEETS, MARKER_PIN, MARKER_VIEWER, MARKER_QUOTE, _internals: { applyPatches, applyGraphqlPatch, applyPinnedPatches } }
 
 if (require.main === module) {
   const checkOnly = process.argv.includes('--check')

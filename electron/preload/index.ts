@@ -45,6 +45,9 @@ const api = {
   humanFollowList: (request: HumanFollowListRequest) => ipcRenderer.invoke('human:followList', request),
   humanFollowAction: (request: { handle: string; action: 'follow' | 'unfollow' }) =>
     ipcRenderer.invoke('human:followAction', request),
+  humanLike: (request: { tweetId: string; action: 'like' | 'unlike' }) => ipcRenderer.invoke('human:like', request),
+  humanRetweet: (request: { tweetId: string; action: 'retweet' | 'unretweet' }) => ipcRenderer.invoke('human:retweet', request),
+  humanBookmark: (request: { tweetId: string; action: 'bookmark' | 'unbookmark' }) => ipcRenderer.invoke('human:bookmark', request),
   humanSearch: (request: HumanSearchRequest) => ipcRenderer.invoke('human:search', request),
 
   prepareOnboarding: () => ipcRenderer.invoke('onboarding:prepare'),

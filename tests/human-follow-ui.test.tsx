@@ -73,7 +73,7 @@ describe('HumanFollow — renderer seam (T6)', () => {
     expect(screen.getAllByText('Unfollow').length).toBeGreaterThan(0)
   })
 
-  it('switches Following → Followers and resets pagination', async () => {
+  it('switches Following → Followers, mounting the second list lazily and keeping the first alive', async () => {
     listMock.mockImplementation(async (req: { subTab: string }) =>
       req.subTab === 'followers'
         ? okPage([makeUser('pat')], false)
@@ -86,14 +86,23 @@ describe('HumanFollow — renderer seam (T6)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Followers' }))
     await screen.findByText('@pat')
 
-    expect(screen.queryByText('@bob')).toBeNull()
     expect(listMock).toHaveBeenLastCalledWith({ subTab: 'followers', count: 10 })
     // Follower relationships start unknown → Follow pill.
     expect(screen.getByRole('button', { name: 'Follow pat' })).toBeTruthy()
+    // Keep-alive: the Following list stays mounted (hidden) with its rows.
+    expect(screen.getByText('@bob')).toBeTruthy()
+    // Switching back is instant — no additional request.
+    fireEvent.click(screen.getByRole('button', { name: 'Following' }))
+    await screen.findByText('@bob')
+    expect(listMock).toHaveBeenCalledTimes(2)
   })
 
   it('flips Follow → Following optimistically and rolls back on failure', async () => {
-    listMock.mockResolvedValue(okPage([makeUser('pat')], false))
+    listMock.mockImplementation(async (req: { subTab: string }) =>
+      req.subTab === 'followers'
+        ? okPage([makeUser('pat')], false)
+        : okPage([makeUser('bob')], false),
+    )
     let settleWrite: ((value: HumanResult<{ handle: string; following: boolean }>) => void) | undefined
     actionMock.mockImplementation(
       () =>
@@ -116,7 +125,11 @@ describe('HumanFollow — renderer seam (T6)', () => {
   })
 
   it('keeps the optimistic state when the write succeeds', async () => {
-    listMock.mockResolvedValue(okPage([makeUser('pat')], false))
+    listMock.mockImplementation(async (req: { subTab: string }) =>
+      req.subTab === 'followers'
+        ? okPage([makeUser('pat')], false)
+        : okPage([makeUser('bob')], false),
+    )
     actionMock.mockResolvedValue({ ok: true, data: { handle: 'pat', following: true } })
 
     render(<HumanFollow />)

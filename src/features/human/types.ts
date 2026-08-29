@@ -50,6 +50,11 @@ export interface HumanTweet {
   retweetedBy?: string | null
   quotedTweet?: HumanQuotedTweet | null
   lang?: string
+  /** Present on Profile Posts — the pinned tweet lands first (X convention). */
+  pinned?: boolean
+  /** Viewer state: the signed-in user already liked/retweeted this tweet. */
+  liked?: boolean
+  retweeted?: boolean
 }
 
 /** Full-mode user object (count keys `followers`/`following`/`tweets`). */

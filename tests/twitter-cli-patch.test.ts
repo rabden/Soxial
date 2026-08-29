@@ -99,6 +99,16 @@ class TwitterClient:
             except Exception as exc:
                 logger.debug("Failed to generate transaction id: %s", exc)
         return headers
+
+    def fetch_user_tweets(self, user_id, count=20):
+        # type: (str, int) -> List[Tweet]
+        """Fetch tweets posted by a user."""
+        return self._fetch_timeline(
+            "UserTweets",
+            count,
+            lambda data: _deep_get(data, "data", "user", "result", "timeline_v2", "timeline", "instructions"),
+            extra_variables={},
+        )
 `
 
 function fixturePath(source: string = FIXTURE): string {
@@ -138,7 +148,12 @@ describe('patch-twitter-cli.cjs (#45)', () => {
     )
     // D: redacted presence log (boolean only, never the value)
     expect(patched).toContain('logger.debug("x-client-transaction-id available=%s", bool(self._client_transaction))')
-    expect(patched).not.toMatch(/logger\.\w+\(.*generate_transaction_id\(.*\)\s*\)/s)
+    // No logger call may interpolate the generated transaction id value
+    // (single-line scope — the value would appear inside the call's args).
+    expect(patched).not.toMatch(/logger\.\w+\([^)\n]*generate_transaction_id/)
+
+    // G: fetch_user_tweets reads the current timeline shape
+    expect(patched).toContain('_deep_get(data, "data", "user", "result", "timeline", "timeline", "instructions")')
   })
 
   it('is idempotent — a second run is a no-op', () => {
@@ -146,7 +161,8 @@ describe('patch-twitter-cli.cjs (#45)', () => {
     applyTwitterCliPatch({ clientPy: file })
     const result = applyTwitterCliPatch({ clientPy: file })
 
-    expect(result).toMatchObject({ ok: true, patched: false, reason: 'already patched' })
+    expect(result).toMatchObject({ ok: true, patched: false })
+    expect(result.reason).toContain('already patched')
   })
 
   it('fails loudly when the anchor block drifted upstream', () => {
@@ -177,7 +193,8 @@ describe('patch-twitter-cli.cjs (#45)', () => {
 
     applyTwitterCliPatch({ clientPy: pristine })
     const patched = applyTwitterCliPatch({ clientPy: pristine, checkOnly: true })
-    expect(patched).toMatchObject({ ok: true, patched: false, reason: 'already patched' })
+    expect(patched).toMatchObject({ ok: true, patched: false })
+    expect(patched.reason).toContain('already patched')
     expect(patched.checkFailed).toBeUndefined()
   })
 

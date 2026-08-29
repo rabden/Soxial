@@ -175,22 +175,32 @@ export function registerHumanHandlers(): void {
     const guarded = await requireSessionHandle()
     if (!guarded.ok) return { ok: false as const, error: guarded.error }
 
-    const count = clampHumanCount(request?.count)
-    // Posts = authored non-replies (`--exclude replies`). Replies must be
-    // positively selected: `--exclude retweets` alone still returns standalone
-    // posts, so the Replies tab passes the `filter:replies` operator through
-    // the query text (the CLI has no --has replies choice; the operator is
-    // composed into rawQuery verbatim, contract §7 + search.py:105-113).
-    const args =
-      request?.subTab === 'replies'
-        ? ['search', 'filter:replies', '--json', '--from', guarded.handle, '-n', String(count)]
-        : ['search', '--json', '--from', guarded.handle, '--exclude', 'replies', '-n', String(count)]
-    const until = sanitizeIsoDate(request?.until)
-    if (until) args.push('--until', until)
+    // Posts: the native UserTweets timeline (`user-posts`) — chronological
+    // (newest first), pinned tweet first, no SearchTimeline index gaps (the
+    // search `from:` index silently misses recent tweets, which is why this
+    // tab used to show a handful of stale posts). Count-growth pagination:
+    // no cursor exists, each page grows the requested count by the renderer
+    // (same strategy as bookmarks), capped by the connector.
+    // Replies: search remains the only source (UserTweets excludes replies)
+    // — Latest product + `--until` date-window pagination.
+    if (request?.subTab === 'replies') {
+      const count = clampHumanCount(request?.count)
+      const args = ['search', 'filter:replies', '--json', '-t', 'Latest', '--from', guarded.handle, '-n', String(count)]
+      const until = sanitizeIsoDate(request?.until)
+      if (until) args.push('--until', until)
 
-    const res = await runHumanTwitterCli(args)
+      const res = await runHumanTwitterCli(args)
+      if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+      return { ok: true as const, data: toWindowedHumanPage(res, count) }
+    }
+
+    const count = clampGrowthCount(request?.count)
+    const res = await runHumanTwitterCli(['user-posts', guarded.handle, '--json', '-n', String(count)])
     if (!res.ok) return { ok: false as const, error: mapCliError(res) }
-    return { ok: true as const, data: toWindowedHumanPage(res, count) }
+
+    const items = extractHumanItems(res)
+    const hasMore = items.length >= count && count < HUMAN_CLI_HARD_CAP
+    return { ok: true as const, data: { items, hasMore } }
   })
 
   ipcMain.handle('human:bookmarks', async (_event, request: { count?: number } = {}) => {
@@ -260,6 +270,40 @@ export function registerHumanHandlers(): void {
       return { ok: true as const, data: { handle, following: action === 'follow' } }
     },
   )
+
+  // ——— Tweet actions (like / repost / bookmark) ———
+  ipcMain.handle('human:like', async (_event, request: { tweetId?: string; action?: 'like' | 'unlike' }) => {
+    const session = await verifyHumanSession()
+    if (!session.ok) return authError(session)
+    const tweetId = String(request?.tweetId ?? '').trim()
+    if (!/^\d+$/.test(tweetId)) return { ok: false as const, error: invalidError('Invalid tweet ID') }
+    const action = request?.action === 'unlike' ? 'unlike' : 'like'
+    const res = await runHumanTwitterCli([action, tweetId, '--json'])
+    if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+    return { ok: true as const, data: { tweetId, action } }
+  })
+
+  ipcMain.handle('human:retweet', async (_event, request: { tweetId?: string; action?: 'retweet' | 'unretweet' }) => {
+    const session = await verifyHumanSession()
+    if (!session.ok) return authError(session)
+    const tweetId = String(request?.tweetId ?? '').trim()
+    if (!/^\d+$/.test(tweetId)) return { ok: false as const, error: invalidError('Invalid tweet ID') }
+    const action = request?.action === 'unretweet' ? 'unretweet' : 'retweet'
+    const res = await runHumanTwitterCli([action, tweetId, '--json'])
+    if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+    return { ok: true as const, data: { tweetId, action } }
+  })
+
+  ipcMain.handle('human:bookmark', async (_event, request: { tweetId?: string; action?: 'bookmark' | 'unbookmark' }) => {
+    const session = await verifyHumanSession()
+    if (!session.ok) return authError(session)
+    const tweetId = String(request?.tweetId ?? '').trim()
+    if (!/^\d+$/.test(tweetId)) return { ok: false as const, error: invalidError('Invalid tweet ID') }
+    const action = request?.action === 'unbookmark' ? 'unbookmark' : 'bookmark'
+    const res = await runHumanTwitterCli([action, tweetId, '--json'])
+    if (!res.ok) return { ok: false as const, error: mapCliError(res) }
+    return { ok: true as const, data: { tweetId, action } }
+  })
 
   ipcMain.handle('human:search', async (_event, request: HumanSearchRequest) => {
     const session = await verifyHumanSession()

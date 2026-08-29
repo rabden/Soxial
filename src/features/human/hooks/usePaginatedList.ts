@@ -15,6 +15,11 @@ export interface UsePaginatedListOptions<T> {
    * `nextCursor`. Default: `page.nextCursor`.
    */
   deriveNextCursor?: (page: Paginated<T>) => string | undefined
+  /**
+   * Lazy activation (keep-alive sub-tabs): the first page loads only once
+   * enabled; state persists while disabled. Default: enabled.
+   */
+  enabled?: boolean
 }
 
 export interface PaginatedListState<T> {
@@ -57,9 +62,10 @@ export function usePaginatedList<T>({
   fetchPage,
   getItemId,
   deriveNextCursor,
+  enabled = true,
 }: UsePaginatedListOptions<T>): PaginatedListState<T> {
   const [items, setItems] = useState<T[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(enabled)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<AppError | null>(null)
   const [moreError, setMoreError] = useState<AppError | null>(null)
@@ -71,8 +77,8 @@ export function usePaginatedList<T>({
   const itemsRef = useRef<T[]>([])
   const hasMoreRef = useRef(false)
 
-  const optionsRef = useRef({ fetchPage, getItemId, deriveNextCursor })
-  optionsRef.current = { fetchPage, getItemId, deriveNextCursor }
+  const optionsRef = useRef({ fetchPage, getItemId, deriveNextCursor, enabled })
+  optionsRef.current = { fetchPage, getItemId, deriveNextCursor, enabled }
 
   const syncRefs = () => {
     hasMoreRef.current = hasMore
@@ -83,6 +89,7 @@ export function usePaginatedList<T>({
   const load = useCallback((mode: 'initial' | 'more') => {
     const epoch = epochRef.current
     if (activeEpochRef.current === epoch) return // this generation already in flight
+    if (!optionsRef.current.enabled) return // not activated yet
     if (mode === 'more' && (!hasMoreRef.current || itemsRef.current.length === 0)) return
 
     activeEpochRef.current = epoch
@@ -167,14 +174,17 @@ export function usePaginatedList<T>({
     load('initial')
   }, [load])
 
-  // Load page 1 whenever the reset key changes; invalidate stragglers on cleanup.
+  // Load page 1 whenever the reset key changes (or the list activates);
+  // invalidate stragglers on cleanup. A disabled list loads nothing yet —
+  // the flip to enabled triggers this effect like a key change.
   useEffect(() => {
+    if (!enabled) return
     resetAndLoad()
     return () => {
       epochRef.current += 1
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetKey])
+  }, [resetKey, enabled])
 
   const reload = useCallback(() => resetAndLoad(), [resetAndLoad])
   const loadMore = useCallback(() => load('more'), [load])

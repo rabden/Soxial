@@ -84,7 +84,9 @@ describe('Human Mode UI — window API / component seam', () => {
 
   it('renders HumanPage content for the active tab without its own top bar', async () => {
     const { rerender } = render(<HumanPage activeTab="feed" onTabChange={vi.fn()} />)
-    expect(await screen.findByText('No posts yet')).toBeTruthy()
+    // Both For you / Following lists stay mounted (keep-alive) — one visible,
+    // one hidden — so the empty copy exists for each sub-tab.
+    expect((await screen.findAllByText('No posts yet')).length).toBeGreaterThanOrEqual(1)
     // Navigation now lives in the Sidebar — HumanPage should not render the top tab bar
     expect(screen.queryByRole('button', { name: /^bookmarks$/i })).toBeNull()
 

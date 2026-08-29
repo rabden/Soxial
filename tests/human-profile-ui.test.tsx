@@ -85,7 +85,7 @@ describe('HumanProfile — renderer seam', () => {
     expect(screen.getByText('300')).toBeTruthy() // following
   })
 
-  it('separates Posts and Replies by sub-tab and resets pagination on switch', async () => {
+  it('separates Posts and Replies by sub-tab, mounting Replies lazily and keeping Posts alive', async () => {
     profileMock.mockResolvedValue({ ok: true, data: alice })
     postsMock.mockImplementation(async (req: { subTab: string }) =>
       req.subTab === 'posts'
@@ -99,13 +99,37 @@ describe('HumanProfile — renderer seam', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Replies' }))
     await screen.findByText('my reply')
 
-    expect(screen.queryByText('my post')).toBeNull()
     expect(postsMock).toHaveBeenLastCalledWith({ subTab: 'replies', count: 10, until: undefined })
+    // Keep-alive: the Posts list stays mounted (hidden) with its items.
+    expect(screen.getByText('my post')).toBeTruthy()
   })
 
-  it('advances the date window from the oldest seen item, newest-first', async () => {
+  it('grows the Posts page count (user-posts has no cursor)', async () => {
     profileMock.mockResolvedValue({ ok: true, data: alice })
-    postsMock.mockImplementation(async (req: { until?: string }) => {
+    postsMock.mockImplementation(async (req: { subTab: string; count?: number }) => {
+      if (req.subTab !== 'posts') return okPage([], false)
+      const count = req.count ?? 10
+      const items = Array.from(
+        { length: count },
+        (_, i) => makeTweet(`p${i + 1}`, `2026-08-${String(28 - Math.floor(i / 2)).padStart(2, '0')}T10:00:00Z`),
+      )
+      return okPage(items, count < 30)
+    })
+
+    render(<HumanProfile />)
+    await screen.findByText('post-p1')
+
+    markSentinelIntersecting()
+    await screen.findByText('post-p20')
+
+    expect(postsMock).toHaveBeenCalledTimes(2)
+    expect(postsMock.mock.calls[1][0]).toEqual({ subTab: 'posts', count: 20 })
+  })
+
+  it('advances the Replies date window from the oldest seen item', async () => {
+    profileMock.mockResolvedValue({ ok: true, data: alice })
+    postsMock.mockImplementation(async (req: { subTab: string; until?: string }) => {
+      if (req.subTab !== 'replies') return okPage([], false)
       if (!req.until) {
         return okPage(
           [
@@ -123,13 +147,13 @@ describe('HumanProfile — renderer seam', () => {
     })
 
     render(<HumanProfile />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Replies' }))
     await screen.findByText('post-1')
 
     markSentinelIntersecting()
     await screen.findByText('post-4')
 
-    expect(postsMock).toHaveBeenCalledTimes(2)
-    expect(postsMock.mock.calls[1][0]).toEqual({ subTab: 'posts', count: 10, until: '2026-08-25' })
+    expect(postsMock).toHaveBeenLastCalledWith({ subTab: 'replies', count: 10, until: '2026-08-25' })
     expect(screen.getByText(/all caught up/i)).toBeTruthy()
   })
 

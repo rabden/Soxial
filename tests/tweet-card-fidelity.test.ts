@@ -54,6 +54,34 @@ describe('TweetCard fidelity and feed variant', () => {
       })
     })
 
+    it('maps viewer state (liked/retweeted/pinned) and upgrades the avatar size suffix', () => {
+      const parsed = parseTweetData({
+        id: '555',
+        text: 'already acted on',
+        liked: true,
+        retweeted: true,
+        pinned: true,
+        author: {
+          screenName: 'alice',
+          name: 'Alice',
+          // X serves `_normal` (48px) — must upgrade to the 400x400 variant.
+          profileImageUrl: 'https://pbs.twimg.com/profile_images/1/abc_normal.jpg',
+        },
+      })
+
+      expect(parsed.isLiked).toBe(true)
+      expect(parsed.isRetweeted).toBe(true)
+      expect(parsed.isPinned).toBe(true)
+      expect(parsed.authorImage).toBe('https://pbs.twimg.com/profile_images/1/abc_400x400.jpg')
+
+      // `isRetweet` ("this tweet IS a repost of someone else") must NOT set
+      // the viewer's retweeted state.
+      const plain = parseTweetData({ id: '556', text: 'x', isRetweet: true })
+      expect(plain.isRetweet).toBe(true)
+      expect(plain.isRetweeted).toBe(false)
+      expect(plain.isLiked).toBe(false)
+    })
+
     it('extracts snake_case fallback fields', () => {
       const raw = {
         id: '123',
@@ -159,7 +187,9 @@ describe('TweetCard fidelity and feed variant', () => {
       // Inline header metadata
       expect(html).toContain('Tech Lead')
       expect(html).toContain('@techlead')
-      expect(html).toContain('lucide-ellipsis')
+      // The row overflow menu (Ellipsis) is intentionally absent — the feed
+      // row is click-through to x.com (X-faithful action bar only).
+      expect(html).not.toContain('lucide-ellipsis')
 
       // Content rich text highlighting
       expect(html).toContain('text-[#1D9BF0]')
@@ -192,6 +222,64 @@ describe('TweetCard fidelity and feed variant', () => {
       expect(html).toContain('250') // Reposts formatted
       expect(html).toContain('45') // Replies formatted
       expect(html).toContain('32k') // Views formatted
+    })
+
+    it('shows the quote media/link preview only when the quoting tweet has none of its own', () => {
+      const quoteWithMedia = {
+        id: '112233',
+        text: 'Original quoted post',
+        author: { screenName: 'sama', name: 'Sam Altman' },
+        media: [{ type: 'photo', url: 'https://pbs.twimg.com/media/quote-photo.jpg' }],
+        urls: [],
+      }
+      const quoteWithLink = {
+        id: '445566',
+        text: 'Quoted post with a link',
+        author: { screenName: 'sama', name: 'Sam Altman' },
+        media: [],
+        urls: ['https://zed.dev/blog/introducing-deltadb'],
+      }
+
+      // Outer tweet has no attachment → the quote's media renders inside the quote box.
+      const htmlQuoteMedia = renderToStaticMarkup(
+        React.createElement(TweetCard, {
+          variant: 'feed',
+          id: '1',
+          authorName: 'A',
+          authorHandle: 'a',
+          content: 'Look at this',
+          quotedTweet: quoteWithMedia,
+        }),
+      )
+      expect(htmlQuoteMedia).toContain('https://pbs.twimg.com/media/quote-photo.jpg')
+
+      // Outer tweet has no attachment → the quote's link renders as a preview.
+      const htmlQuoteLink = renderToStaticMarkup(
+        React.createElement(TweetCard, {
+          variant: 'feed',
+          id: '2',
+          authorName: 'A',
+          authorHandle: 'a',
+          content: 'Look at this too',
+          quotedTweet: quoteWithLink,
+        }),
+      )
+      expect(htmlQuoteLink).toContain('zed.dev')
+
+      // Outer tweet has its own media → the quote renders text-only (never both).
+      const htmlBoth = renderToStaticMarkup(
+        React.createElement(TweetCard, {
+          variant: 'feed',
+          id: '3',
+          authorName: 'A',
+          authorHandle: 'a',
+          content: 'My own photo',
+          attachments: [{ type: 'image', url: 'https://pbs.twimg.com/media/outer-photo.jpg' }],
+          quotedTweet: quoteWithMedia,
+        }),
+      )
+      expect(htmlBoth).toContain('https://pbs.twimg.com/media/outer-photo.jpg')
+      expect(htmlBoth).not.toContain('https://pbs.twimg.com/media/quote-photo.jpg')
     })
 
     it('calls interaction callbacks on Like, Repost, Bookmark, Share', () => {

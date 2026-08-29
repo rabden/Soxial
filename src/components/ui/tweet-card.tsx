@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useRef, type ReactNode } from 'react'
 import { cn, openExternalUrl } from 'src/lib/utils'
 import {
   Send,
@@ -10,6 +10,7 @@ import {
   BarChart2,
   Bookmark,
   Share2,
+  Pin,
 } from 'lucide-react'
 import { PostAttachments, PostAttachment, extractTweetAttachments, expandTweetLinks } from 'src/components/ui/post-attachment'
 import { getCachedPost, cachePost } from 'src/lib/post-cache'
@@ -22,6 +23,13 @@ function stripMediaLinks(text: string, media: any[]): string {
   return text.replace(/(\s*https:\/\/t\.co\/\S+)+\s*$/, '').trim()
 }
 
+/** X avatar URLs carry a size suffix (mini 24 / normal 48 / bigger 73 px);
+ *  request the 400×400 variant so rendered avatars are never upscaled. */
+function upgradeAvatarUrl(url: string | undefined): string | undefined {
+  if (typeof url !== 'string' || !url) return url
+  return url.replace(/_(mini|normal|bigger)(\.\w+)(\?.*)?$/, '_400x400$2$3')
+}
+
 export function parseTweetData(raw: any): TweetCardProps {
   const author = typeof raw.author === 'object' && raw.author ? raw.author : null
   const authorStr = typeof raw.author === 'string' ? raw.author.replace(/^@/, '') : null
@@ -32,7 +40,7 @@ export function parseTweetData(raw: any): TweetCardProps {
     id: raw.id,
     authorName: name,
     authorHandle: handle,
-    authorImage: author?.profileImageUrl || author?.profileImageURL || raw.profileImageUrl,
+    authorImage: upgradeAvatarUrl(author?.profileImageUrl || author?.profileImageURL || raw.profileImageUrl),
     content: stripMediaLinks(expandTweetLinks(raw.text || raw.full_text || '', raw), raw.media),
     likes: metrics.likes ?? raw.likes ?? 0,
     retweets: metrics.retweets ?? raw.rts ?? raw.retweets ?? 0,
@@ -45,6 +53,11 @@ export function parseTweetData(raw: any): TweetCardProps {
     quotedTweet: raw.quotedTweet ?? raw.quoted_tweet,
     timestamp: raw.createdAtLocal || raw.createdAtISO || raw.createdAt || raw.time,
     verified: author?.verified ?? raw.verified,
+    isPinned: Boolean(raw.pinned ?? raw.isPinned),
+    // Viewer state (X `favorited`/`retweeted`) — distinct from isRetweet
+    // ("this tweet IS a repost of someone else").
+    isLiked: Boolean(raw.liked ?? raw.isLiked),
+    isRetweeted: Boolean(raw.retweeted ?? raw.isRetweeted),
     attachments: extractTweetAttachments(raw),
   }
 }
@@ -111,7 +124,17 @@ export interface TweetCardProps {
   quotes?: number
   isRetweet?: boolean
   retweetedBy?: string
-  quotedTweet?: { id: string; text: string; author?: { screenName: string; name: string } }
+  quotedTweet?: {
+    id: string
+    text: string
+    author?: { screenName: string; name: string; profileImageUrl?: string; verified?: boolean }
+    /** Present via quote-media patch — enables the quote's own preview. */
+    media?: Array<{ type: string; url: string; width?: number; height?: number }>
+    urls?: string[]
+    createdAtISO?: string
+    createdAt?: string
+    createdAtLocal?: string
+  }
   onLike?: () => void
   onRetweet?: () => void
   onBookmark?: () => void
@@ -127,6 +150,11 @@ export interface TweetCardProps {
   attachments?: PostAttachment[]
   showPostButton?: boolean
   variant?: 'card' | 'feed'
+  isLiked?: boolean
+  isRetweeted?: boolean
+  isBookmarked?: boolean
+  /** Profile Posts only — the pinned tweet lands first (X convention). */
+  isPinned?: boolean
 }
 
 function VerifiedBadge({ className }: { className?: string }) {
@@ -224,6 +252,64 @@ function formatRichContent(text: string): ReactNode {
   return parts
 }
 
+function ExpandableTweetContent({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [isOverflowing, setIsOverflowing] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const check = () => {
+      if (expanded) return
+      // Check overflow when clamped to 11 lines
+      if (el.scrollHeight > el.clientHeight + 4) {
+        setIsOverflowing(true)
+      } else if (text.length > 360 || (text.match(/\n/g) || []).length > 8) {
+        // Heuristic for long text that might overflow due to wrapping
+        requestAnimationFrame(() => {
+          if (el.scrollHeight > el.clientHeight + 4) setIsOverflowing(true)
+        })
+      }
+    }
+    check()
+    // ResizeObserver is unavailable in some embedders (jsdom) — the initial
+    // check already covers the static case.
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [text, expanded])
+
+  return (
+    <div>
+      <div
+        ref={ref}
+        className="text-[15px] leading-snug text-foreground whitespace-pre-wrap break-words"
+        style={
+          !expanded
+            ? { display: '-webkit-box', WebkitLineClamp: 11, WebkitBoxOrient: 'vertical', overflow: 'hidden' }
+            : undefined
+        }
+      >
+        {formatRichContent(text)}
+      </div>
+      {isOverflowing && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            setExpanded((v) => !v)
+          }}
+          className="mt-1 text-[14px] leading-none text-[#1D9BF0] hover:underline"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function TweetReplyNode({ reply, depth = 0 }: { reply: TweetCardProps; depth: number }) {
   const displayContent = reply.content || ''
   return (
@@ -274,7 +360,8 @@ export function TweetCard({
   id, tweetId, replyId, authorName, authorHandle, authorImage, content, likes = 0, retweets = 0,
   replies = 0, bookmarks = 0, views = 0, quotes = 0, isRetweet, retweetedBy, quotedTweet,
   onLike, onRetweet, onBookmark, onShare, timestamp, verified, replyTo, onPost, posting, className,
-  repliesList, preview, attachments, showPostButton, variant = 'card'
+  repliesList, preview, attachments, showPostButton, variant = 'card',
+  isLiked, isRetweeted, isBookmarked, isPinned,
 }: TweetCardProps) {
   const [loadedData, setLoadedData] = useState<TweetCardProps | null>(null)
   const [loading, setLoading] = useState(false)
@@ -380,7 +467,8 @@ export function TweetCard({
     authorName, authorHandle, authorImage, content, likes, retweets,
     replies, bookmarks, views, quotes, isRetweet, retweetedBy, quotedTweet,
     onLike, onRetweet, onBookmark, onShare,
-    timestamp, verified, replyTo, onPost, posting, repliesList, attachments, showPostButton, variant
+    timestamp, verified, replyTo, onPost, posting, repliesList, attachments, showPostButton, variant,
+    isLiked, isRetweeted, isBookmarked, isPinned,
   }
 
   const resolvedReplies = loadedReply
@@ -396,6 +484,93 @@ export function TweetCard({
 
   const isFeed = (variant || displayData.variant) === 'feed'
 
+  // Optimistic state for Human actions — local UI updates instantly, reverts on IPC failure
+  const [liked, setLiked] = useState(displayData.isLiked ?? false)
+  const [likeCount, setLikeCount] = useState(displayData.likes ?? 0)
+  const [retweeted, setRetweeted] = useState(displayData.isRetweeted ?? false)
+  const [retweetCount, setRetweetCount] = useState(displayData.retweets ?? 0)
+  const [bookmarked, setBookmarked] = useState(displayData.isBookmarked ?? false)
+  const [showCopied, setShowCopied] = useState(false)
+
+  useEffect(() => {
+    setLiked(displayData.isLiked ?? false)
+    setLikeCount(displayData.likes ?? 0)
+    setRetweeted(displayData.isRetweeted ?? false)
+    setRetweetCount(displayData.retweets ?? 0)
+    setBookmarked(displayData.isBookmarked ?? false)
+  }, [displayData.id, displayData.isLiked, displayData.likes, displayData.isRetweeted, displayData.retweets, displayData.isBookmarked])
+
+  const handleLike = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onLike) { onLike(); return }
+    const tid = tweetIdForLink
+    if (!tid || !/^\d+$/.test(String(tid))) return
+    const next = !liked
+    setLiked(next); setLikeCount((c) => c + (next ? 1 : -1))
+    try {
+      const res: any = await (window as any).api?.humanLike?.({ tweetId: String(tid), action: next ? 'like' : 'unlike' })
+      if (res && res.ok === false) {
+        const msg = res.error?.message || res.error || ''
+        if (/already/i.test(msg)) return
+        throw new Error(msg || 'like failed')
+      }
+    } catch {
+      setLiked(!next); setLikeCount((c) => c + (next ? -1 : 1))
+    }
+  }
+
+  const handleRetweet = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onRetweet) { onRetweet(); return }
+    const tid = tweetIdForLink
+    if (!tid || !/^\d+$/.test(String(tid))) return
+    const next = !retweeted
+    setRetweeted(next); setRetweetCount((c) => c + (next ? 1 : -1))
+    try {
+      const res: any = await (window as any).api?.humanRetweet?.({ tweetId: String(tid), action: next ? 'retweet' : 'unretweet' })
+      if (res && res.ok === false) {
+        const msg = res.error?.message || res.error || ''
+        if (/already/i.test(msg)) return
+        throw new Error(msg)
+      }
+    } catch {
+      setRetweeted(!next); setRetweetCount((c) => c + (next ? -1 : 1))
+    }
+  }
+
+  const handleBookmark = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onBookmark) { onBookmark(); return }
+    const tid = tweetIdForLink
+    if (!tid || !/^\d+$/.test(String(tid))) return
+    const next = !bookmarked
+    setBookmarked(next)
+    try {
+      const res: any = await (window as any).api?.humanBookmark?.({ tweetId: String(tid), action: next ? 'bookmark' : 'unbookmark' })
+      if (res && res.ok === false) {
+        const msg = res.error?.message || res.error || ''
+        if (/already/i.test(msg)) return
+        throw new Error(msg)
+      }
+    } catch {
+      setBookmarked(!next)
+    }
+  }
+
+  const handleShare = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (onShare) { onShare(); return }
+    const url = tweetUrl
+    try {
+      await navigator.clipboard.writeText(url)
+      setShowCopied(true)
+      setTimeout(() => setShowCopied(false), 1500)
+    } catch {
+      // Fallback: open prompt
+      window.prompt('Copy link', url)
+    }
+  }
+
   if (isFeed) {
     const isRetweet = displayData.isRetweet || Boolean(displayData.retweetedBy)
 
@@ -407,10 +582,18 @@ export function TweetCard({
           }
         }}
         className={cn(
-          'w-full border-b border-border/60 hover:bg-white/[0.02] transition-colors px-4 py-3 cursor-pointer',
+          'w-full border-b border-border/60 hover:bg-white/[0.02] transition-colors px-4 py-3 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_180px]',
           className
         )}
       >
+        {/* Pinned header (profile Posts) — X convention, above attribution */}
+        {displayData.isPinned && !isRetweet && (
+          <div className="flex items-center gap-2 mb-1.5 ml-8 text-xs font-semibold text-muted-foreground">
+            <Pin className="size-3.5" />
+            <span>Pinned</span>
+          </div>
+        )}
+
         {/* Retweet header attribution */}
         {isRetweet && (
           <div className="flex items-center gap-2 mb-1.5 ml-8 text-xs font-semibold text-muted-foreground">
@@ -454,11 +637,11 @@ export function TweetCard({
               )}
             </div>
 
-            {/* Content with rich highlights */}
+            {/* Content with rich highlights — 11-line clamp with Show more */}
             {displayData.content && (
-              <p className="mt-1 text-[15px] leading-snug text-foreground whitespace-pre-wrap">
-                {formatRichContent(displayData.content)}
-              </p>
+              <div className="mt-1">
+                <ExpandableTweetContent text={displayData.content} />
+              </div>
             )}
 
             {/* Attachments */}
@@ -474,9 +657,15 @@ export function TweetCard({
               const qa = q.author as any
               const qName = qa?.name || qa?.screenName || ''
               const qHandle = qa?.screenName || ''
-              const qAvatar = qa?.profileImageUrl || qa?.profileImageURL
+              const qAvatar = upgradeAvatarUrl(qa?.profileImageUrl || qa?.profileImageURL)
               const qVerified = Boolean(qa?.verified)
               const qTime = q.createdAtISO || q.createdAt || q.createdAtLocal
+              // X behavior: the quote shows its own media/og preview only when
+              // the quoting tweet has no attachment of its own — never both.
+              const qAttachments =
+                displayData.attachments && displayData.attachments.length > 0
+                  ? []
+                  : extractTweetAttachments(q)
               return (
               <div
                 className="mt-3 rounded-2xl border border-white/[0.12] overflow-hidden hover:bg-white/[0.03] transition-colors cursor-pointer"
@@ -487,7 +676,7 @@ export function TweetCard({
                   }
                 }}
               >
-                <div className="p-3">
+                <div className="p-3 pb-0">
                   {qHandle && (
                     <div className="flex items-center gap-1.5 min-w-0">
                       <div className="size-5 rounded-full overflow-hidden bg-zinc-800 flex-shrink-0">
@@ -510,10 +699,19 @@ export function TweetCard({
                       )}
                     </div>
                   )}
-                  <div className="mt-1.5 text-[14px] leading-[19px] text-foreground whitespace-pre-wrap break-words">
-                    {formatRichContent(q.text || '')}
+                  <div className="mt-1.5 pb-3 text-[14px] leading-[19px] text-foreground whitespace-pre-wrap break-words">
+                    {formatRichContent(stripMediaLinks(expandTweetLinks(q.text || '', q), q.media))}
                   </div>
                 </div>
+                {qAttachments.length > 0 && (
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <PostAttachments
+                      attachments={qAttachments}
+                      // Flush inside the quote card: square media, bottom edge-to-edge.
+                      mediaClassName="rounded-none rounded-b-2xl border-x-0 border-b-0 border-t-0"
+                    />
+                  </div>
+                )}
               </div>
               )
             })()}
@@ -523,7 +721,7 @@ export function TweetCard({
               className="mt-3 flex w-full items-center justify-between text-muted-foreground text-[13px]"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Reply */}
+              {/* Reply — comment not yet implemented, keep inert */}
               <button
                 type="button"
                 className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors -ml-1.5"
@@ -540,30 +738,38 @@ export function TweetCard({
               {/* Repost */}
               <button
                 type="button"
-                onClick={displayData.onRetweet}
-                className="group flex items-center gap-1.5 hover:text-[#00BA7C] transition-colors"
-                aria-label="Repost"
+                onClick={handleRetweet}
+                className={cn(
+                  'group flex items-center gap-1.5 transition-colors',
+                  retweeted ? 'text-[#00BA7C]' : 'hover:text-[#00BA7C]'
+                )}
+                aria-label={retweeted ? 'Unrepost' : 'Repost'}
+                aria-pressed={retweeted}
               >
-                <div className="p-1.5 rounded-full group-hover:bg-[#00BA7C]/10 transition-colors">
-                  <Repeat2 className="size-4" />
+                <div className={cn('p-1.5 rounded-full transition-colors', retweeted ? 'bg-[#00BA7C]/10' : 'group-hover:bg-[#00BA7C]/10')}>
+                  <Repeat2 className={cn('size-4', retweeted && 'fill-current')} />
                 </div>
-                {displayData.retweets !== undefined && displayData.retweets > 0 && (
-                  <span className="text-xs">{fmt(displayData.retweets)}</span>
+                {retweetCount > 0 && (
+                  <span className="text-xs">{fmt(retweetCount)}</span>
                 )}
               </button>
 
               {/* Like */}
               <button
                 type="button"
-                onClick={displayData.onLike}
-                className="group flex items-center gap-1.5 hover:text-[#F91880] transition-colors"
-                aria-label="Like"
+                onClick={handleLike}
+                className={cn(
+                  'group flex items-center gap-1.5 transition-colors',
+                  liked ? 'text-[#F91880]' : 'hover:text-[#F91880]'
+                )}
+                aria-label={liked ? 'Unlike' : 'Like'}
+                aria-pressed={liked}
               >
-                <div className="p-1.5 rounded-full group-hover:bg-[#F91880]/10 transition-colors">
-                  <Heart className="size-4" />
+                <div className={cn('p-1.5 rounded-full transition-colors', liked ? 'bg-[#F91880]/10' : 'group-hover:bg-[#F91880]/10')}>
+                  <Heart className={cn('size-4', liked && 'fill-[#F91880] text-[#F91880]')} />
                 </div>
-                {displayData.likes !== undefined && displayData.likes > 0 && (
-                  <span className="text-xs">{fmt(displayData.likes)}</span>
+                {likeCount > 0 && (
+                  <span className="text-xs">{fmt(likeCount)}</span>
                 )}
               </button>
 
@@ -581,22 +787,30 @@ export function TweetCard({
               <div className="flex items-center">
                 <button
                   type="button"
-                  onClick={displayData.onBookmark}
-                  className="group flex items-center hover:text-[#1D9BF0] transition-colors"
-                  aria-label="Bookmark"
+                  onClick={handleBookmark}
+                  className={cn(
+                    'group flex items-center transition-colors',
+                    bookmarked ? 'text-[#1D9BF0]' : 'hover:text-[#1D9BF0]'
+                  )}
+                  aria-label={bookmarked ? 'Unbookmark' : 'Bookmark'}
+                  aria-pressed={bookmarked}
                 >
-                  <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
-                    <Bookmark className="size-4" />
+                  <div className={cn('p-1.5 rounded-full transition-colors', bookmarked ? 'bg-[#1D9BF0]/10' : 'group-hover:bg-[#1D9BF0]/10')}>
+                    <Bookmark className={cn('size-4', bookmarked && 'fill-[#1D9BF0] text-[#1D9BF0]')} />
                   </div>
                 </button>
                 <button
                   type="button"
-                  onClick={displayData.onShare}
+                  onClick={handleShare}
                   className="group flex items-center hover:text-[#1D9BF0] transition-colors -mr-1.5"
-                  aria-label="Share"
+                  aria-label={showCopied ? 'Copied' : 'Share'}
                 >
                   <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
-                    <Share2 className="size-4" />
+                    {showCopied ? (
+                      <span className="text-[10px] font-bold px-1">✓</span>
+                    ) : (
+                      <Share2 className="size-4" />
+                    )}
                   </div>
                 </button>
               </div>
