@@ -12,8 +12,8 @@
 // nothing-deleted storage, and grok-build's tool-pair snap-forward rule,
 // overflow fit-ladder, degenerate-output rejection, and fail-open posture.
 
-import { estimateMessageTokens, safeJson, tailBudgetTokens } from './context-budget'
-import { getModelWindow } from './models'
+import { estimateMessageTokens, safeJson, tailBudgetTokens, usableWindowTokens } from './context-budget'
+import { getModelWindow, type ModelWindow } from './models'
 import { isContextLengthError } from './context-errors'
 import { logger } from './log'
 
@@ -209,6 +209,8 @@ export interface CompactionResult {
   compactedMessages: any[]
   /** User messages kept raw inside the tail (for logging and anchoring). */
   tailUserCount: number
+  /** How many summarizer passes the head was folded through (1 = single-shot). */
+  chunkCount: number
 }
 
 export interface CompactSessionParams {
@@ -217,41 +219,66 @@ export interface CompactSessionParams {
   modelMessages: any[]
   modelId: string
   priorSummary?: string | null
+  /**
+   * Window of the model that will run the summarization — chunk sizing uses
+   * it. Defaults to the session model's window when the caller doesn't know
+   * the summarizer separately.
+   */
+  summarizerWindow?: ModelWindow
   /** Summarizer seam — the caller wires the model call (fallback-chain head). */
   summarize: (request: { system: string; user: string }) => Promise<string>
 }
 
 const SUMMARY_MAX_ATTEMPTS = 2
+/** Share of the summarizer's usable window one fold chunk may occupy. */
+export const SUMMARY_CHUNK_SHARE = 0.6
 
 /**
- * Run one compaction pass. Returns null (fail open — the caller proceeds
- * uncompacted) when there is nothing to summarize, the summarizer fails, or
- * the summary is degenerate after one retry. When the summary request itself
- * overflows, the input degrades through the lossy ladder before giving up.
+ * Slice the head into chunks that each fit the summarizer's window
+ * (grok-build's inter_compaction pattern, simplified): oversized heads are
+ * summarized chunk-by-chunk, each pass carrying the previous fold forward
+ * inside <prior-summary>, so a head of any size folds down without a
+ * lossy-butchery pass.
  */
-export async function compactSessionHistory(params: CompactSessionParams): Promise<CompactionResult | null> {
-  const window = getModelWindow(params.modelId)
-  const budget = tailBudgetTokens(window)
-  const { head, tail } = splitForCompaction(params.modelMessages, budget)
-  if (head.length === 0) return null
+function sliceByTokenBudget(messages: readonly any[], tokenBudget: number): any[][] {
+  const slices: any[][] = []
+  let current: any[] = []
+  let spent = 0
+  for (const msg of messages) {
+    const cost = estimateMessageTokens(msg)
+    if (current.length > 0 && spent + cost > tokenBudget) {
+      slices.push(current)
+      current = []
+      spent = 0
+    }
+    current.push(msg)
+    spent += cost
+  }
+  if (current.length > 0) slices.push(current)
+  return slices
+}
 
-  let serialized = serializeHeadForSummary(head, params.priorSummary)
+/**
+ * Summarize one chunk with the per-chunk discipline: on a context-overflow
+ * error the chunk degrades through the lossy ladder and retries once; a
+ * degenerate result retries once; anything else fails the pass.
+ */
+async function summarizeChunk(
+  chunk: readonly any[],
+  prior: string | null,
+  summarize: CompactSessionParams['summarize'],
+): Promise<string | null> {
+  let serialized = serializeHeadForSummary(chunk, prior)
   let lossy = false
-  let summary: string | null = null
-
-  for (let attempt = 0; attempt < SUMMARY_MAX_ATTEMPTS && !summary; attempt++) {
+  for (let attempt = 0; attempt < SUMMARY_MAX_ATTEMPTS; attempt++) {
     try {
-      const text = await params.summarize(buildSummaryRequest(serialized))
-      if (!isDegenerateSummary(text)) {
-        summary = text.trim()
-      } else {
-        logger.warn('compaction', `degenerate summary (attempt ${attempt + 1}/${SUMMARY_MAX_ATTEMPTS}, ${text.trim().length} chars)`)
-      }
+      const text = await summarize(buildSummaryRequest(serialized))
+      if (!isDegenerateSummary(text)) return text.trim()
+      logger.warn('compaction', `degenerate summary (attempt ${attempt + 1}/${SUMMARY_MAX_ATTEMPTS}, ${text.trim().length} chars)`)
     } catch (e: any) {
       if (isContextLengthError(e) && !lossy) {
-        // Fit ladder: the summary request overflowed — degrade the input and retry.
         lossy = true
-        serialized = serializeHeadForSummary(head, params.priorSummary, LOSSY_SERIALIZED_MAX_CHARS)
+        serialized = serializeHeadForSummary(chunk, prior, LOSSY_SERIALIZED_MAX_CHARS)
         logger.warn('compaction', 'summary request overflowed — retrying with lossy serialization')
       } else {
         logger.error('compaction', `summarizer failed — failing open: ${e?.message || e}`)
@@ -259,16 +286,43 @@ export async function compactSessionHistory(params: CompactSessionParams): Promi
       }
     }
   }
+  return null
+}
 
-  if (!summary) {
-    logger.warn('compaction', 'no usable summary after retry budget — failing open')
-    return null
+/**
+ * Run one compaction pass. Returns null (fail open — the caller proceeds
+ * uncompacted) when there is nothing to summarize, the summarizer fails, or
+ * the summary is degenerate after one retry. Oversized heads fold through
+ * window-sized chunks before giving up; the lossy ladder is the last resort
+ * within a single chunk.
+ */
+export async function compactSessionHistory(params: CompactSessionParams): Promise<CompactionResult | null> {
+  const window = getModelWindow(params.modelId)
+  const budget = tailBudgetTokens(window)
+  const { head, tail } = splitForCompaction(params.modelMessages, budget)
+  if (head.length === 0) return null
+
+  const summarizerWin = params.summarizerWindow ?? getModelWindow(params.modelId)
+  const headChunks = sliceByTokenBudget(head, Math.max(1, Math.floor(SUMMARY_CHUNK_SHARE * usableWindowTokens(summarizerWin))))
+
+  let prior: string | null = params.priorSummary ?? null
+  for (let ci = 0; ci < headChunks.length; ci++) {
+    const folded = await summarizeChunk(headChunks[ci], prior, params.summarize)
+    if (folded == null) {
+      logger.warn('compaction', `chunk ${ci + 1}/${headChunks.length} failed — failing open`)
+      return null
+    }
+    prior = folded
   }
+
+  const summary = prior
+  if (!summary) return null
 
   const compactedMessages = [buildCarrierMessage(summary), ...tail]
   return {
     summary,
     compactedMessages,
     tailUserCount: tail.filter(m => m?.role === 'user').length,
+    chunkCount: headChunks.length,
   }
 }

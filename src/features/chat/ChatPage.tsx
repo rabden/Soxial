@@ -118,6 +118,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
   const [inputAreaHeight, setInputAreaHeight] = useState(0);
   const [scrollbarW, setScrollbarW] = useState(6);
   const contextSummaryRef = useRef<string | null>(null);
+  const [contextState, setContextState] = useState<{ usedTokens: number; usableTokens: number; compacted: boolean } | null>(null);
   const [quickActions, setQuickActions] = useState<string[]>([]);
   const fetchedQuickActions = useRef(false);
   const quickActionsRequestRef = useRef(0);
@@ -382,12 +383,30 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     });
 
     contextSummaryRef.current = await window.api.getSessionSummary(id);
+    void refreshContextState(id);
+  }
+
+  /** Live context-gauge state (#59): refreshed on session open, model change, and after each run. */
+  async function refreshContextState(sid: number | null) {
+    if (sid == null) {
+      setContextState(null);
+      return;
+    }
+    try {
+      const state = await window.api.contextState(sid, selectedModel);
+      setContextState(state.contextTokens != null
+        ? { usedTokens: state.contextTokens, usableTokens: state.usableTokens, compacted: state.compacted }
+        : null);
+    } catch {
+      setContextState(null);
+    }
   }
 
   async function newChat() {
     setView("chat");
     setCurrentSessionId(null);
     contextSummaryRef.current = null;
+    setContextState(null);
   }
 
   async function deleteSession(id: number) {
@@ -397,8 +416,15 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     if (currentSessionId === id) {
       setCurrentSessionId(null);
       contextSummaryRef.current = null;
+      setContextState(null);
     }
   }
+
+  // The gauge's window comes from the selected model — recompute on change.
+  useEffect(() => {
+    void refreshContextState(currentSessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedModel, currentSessionId]);
 
   useEffect(() => {
     const cleanup: Array<() => void> = [];
@@ -951,6 +977,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     void window.api.getSessionSummary(sid).then((s) => {
       contextSummaryRef.current = s;
     });
+    void refreshContextState(sid);
 
     // Clear refs AFTER reading values
     streamTextRefs.current[sid] = "";
@@ -1238,6 +1265,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                   modelExhaustionStatus={modelExhaustionStatus}
                   onModelChange={(model) => setSelectedModel(model)}
                   onEffortChange={(effort) => setSelectedEffort(effort)}
+                  contextState={contextState}
                 />
               </div>
             </div>

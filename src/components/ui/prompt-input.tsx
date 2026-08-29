@@ -247,6 +247,8 @@ export interface PromptInputProps {
   modelExhaustionStatus?: Record<string, { exhausted: boolean; availableAt: string | null }>;
   onModelChange?: (model: string) => void;
   onEffortChange?: (effort: string) => void;
+  /** Live context usage for the current session (ticket #59). Null → no gauge. */
+  contextState?: { usedTokens: number; usableTokens: number; compacted: boolean } | null;
 }
 
 export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
@@ -270,6 +272,7 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
       modelExhaustionStatus,
       onModelChange,
       onEffortChange,
+      contextState,
     },
     forwardedRef,
   ) => {
@@ -1006,6 +1009,29 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
                 })}
               </div>
             </div>
+
+            {/* Context gauge (ticket #59): usage share of the usable window,
+                fed from the agent runtime's per-session token snapshot. */}
+            {contextState && contextState.usableTokens > 0 && (
+              <span
+                data-testid="context-gauge"
+                title={`~${Math.round(contextState.usedTokens / 1000)}k of ${Math.round(contextState.usableTokens / 1000)}k usable context tokens${contextState.compacted ? " · compacted history" : ""}`}
+                className="flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium text-foreground/40"
+              >
+                <span
+                  data-testid="context-gauge-dot"
+                  className={cn(
+                    "size-1.5 rounded-full",
+                    contextState.usedTokens / contextState.usableTokens >= 0.85
+                      ? "bg-red-400/80"
+                      : contextState.usedTokens / contextState.usableTokens >= 0.7
+                        ? "bg-amber-400/80"
+                        : "bg-foreground/30",
+                  )}
+                />
+                {Math.min(999, Math.round((contextState.usedTokens / contextState.usableTokens) * 100))}%
+              </span>
+            )}
 
             {/* Effort toggle - only for models that support it */}
             {showEffort && (

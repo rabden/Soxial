@@ -274,6 +274,89 @@ describe('compactSessionHistory', () => {
       if (tail[i].role === 'tool') expect(tail[i - 1].role, `tool message at ${i} needs its assistant call before it`).toBe('assistant')
     }
   })
+
+  it('keeps tail messages as the same object references — provider signatures ride along', () => {
+    // Fog item (map #54): the compacted tail must not rebuild messages, or
+    // Google thoughtSignatures / providerOptions would be stripped.
+    const signed = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'with signature' }],
+      providerOptions: { google: { thoughtSignature: 'sig-abc' } },
+    }
+    const { tail } = splitForCompaction([userMsg('old'), signed], 100_000)
+    expect(tail).toContain(signed)
+    expect(tail.find(m => m.role === 'assistant')).toBe(signed)
+  })
+
+  describe('chunked fold (oversized heads)', () => {
+    // Summarizer window sized so ~900-token chunks force multiple folds.
+    const tinySummarizerWindow = { contextWindow: 8_000, maxOutputTokens: 1_000 }
+
+    function bigHead(messageCount: number) {
+      return Array.from({ length: messageCount }, (_, i) => userMsg(`chunk fodder ${i} ${'x'.repeat(3400)}`))
+    }
+
+    it('folds an oversized head chunk-by-chunk, carrying each fold forward', async () => {
+      let fold = 0
+      const summarize = vi.fn(async () => {
+        fold += 1
+        return `fold ${fold} ${summaryText}`
+      })
+      const result = await compactSessionHistory({
+        system: 'SYS',
+        modelMessages: [...bigHead(30), assistantMsg('recent'), userMsg('latest question')],
+        modelId: 'glm-5.3',
+        priorSummary: null,
+        summarizerWindow: tinySummarizerWindow,
+        summarize,
+      })
+      expect(result).not.toBeNull()
+      expect(result!.chunkCount).toBeGreaterThanOrEqual(2)
+      expect(summarize).toHaveBeenCalledTimes(result!.chunkCount)
+
+      // Call 0 carries no prior; each later call carries the previous fold.
+      expect(summarize.mock.calls[0][0].user).not.toContain('<prior-summary>\nfold')
+      expect(summarize.mock.calls[1][0].user).toContain('<prior-summary>')
+      const lastCall = summarize.mock.calls.at(-1)![0].user
+      expect(lastCall).toContain(`fold ${result!.chunkCount - 1}`)
+
+      // The final summary (last fold) lands in the carrier.
+      expect(result!.summary).toContain(`fold ${result!.chunkCount}`)
+      expect(result!.compactedMessages[0].content[0].text).toContain(`fold ${result!.chunkCount}`)
+    })
+
+    it('feeds the original prior summary into the first chunk only', async () => {
+      const summarize = vi.fn(async () => summaryText)
+      const result = await compactSessionHistory({
+        system: 'SYS',
+        modelMessages: [...bigHead(30), userMsg('latest question')],
+        modelId: 'glm-5.3',
+        priorSummary: 'ORIGINAL PRIOR',
+        summarizerWindow: tinySummarizerWindow,
+        summarize,
+      })
+      expect(result!.chunkCount).toBeGreaterThanOrEqual(2)
+      expect(summarize.mock.calls[0][0].user).toContain('ORIGINAL PRIOR')
+    })
+
+    it('fails open when any chunk fails', async () => {
+      const summarize = vi.fn()
+        .mockResolvedValueOnce(summaryText)
+        .mockRejectedValueOnce(new Error('provider on fire'))
+      const result = await compactSessionHistory({
+        system: 'SYS',
+        modelMessages: [...bigHead(30), userMsg('latest question')],
+        modelId: 'glm-5.3',
+        priorSummary: null,
+        summarizerWindow: tinySummarizerWindow,
+        summarize,
+      })
+      expect(result).toBeNull()
+      expect(summarize).toHaveBeenCalledTimes(2)
+    })
+  })
+
+
 })
 
 // Local helper: glm-5.3 (128k window family) clamps to the same
