@@ -117,6 +117,11 @@ const api = {
     ipcRenderer.on('chat:chunk', listener)
     return () => { ipcRenderer.off('chat:chunk', listener) }
   },
+  onChatContextTokens: (cb: (data: { sessionId: number; tokens: number; model: string; compactsAtTokens: number }) => void) => {
+    const listener = (_e: any, payload: any) => cb(payload)
+    ipcRenderer.on('chat:contextTokens', listener)
+    return () => { ipcRenderer.off('chat:contextTokens', listener) }
+  },
   onChatToolCall: (cb: (data: { name: string; args: any; sessionId: number }) => void) => {
     const listener = (_e: any, data: any) => cb(data)
     ipcRenderer.on('chat:toolCall', listener)

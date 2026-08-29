@@ -80,6 +80,7 @@ interface Window {
     puterAuthCancel: () => Promise<boolean>
     puterAuthOpen: () => Promise<boolean>
     onChatChunk: (cb: (data: { text: string; sessionId: number }) => void) => () => void
+    onChatContextTokens: (cb: (data: { sessionId: number; tokens: number; model: string; compactsAtTokens: number }) => void) => () => void
     onChatToolCall: (cb: (data: { name: string; args: any; sessionId: number }) => void) => () => void
     onChatToolResult: (cb: (data: { name: string; result: any; sessionId: number }) => void) => () => void
     onChatError: (cb: (data: { error: string; appError?: import('./app-error').AppError; sessionId: number }) => void) => () => void
