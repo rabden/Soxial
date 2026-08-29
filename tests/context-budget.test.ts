@@ -9,7 +9,6 @@ import {
   TAIL_BUDGET_MIN_TOKENS,
   compactionThresholdTokens,
   estimateContextTokens,
-  estimateImageTokens,
   estimateMessageTokens,
   estimateTokens,
   tailBudgetTokens,
@@ -33,9 +32,9 @@ describe('estimateTokens', () => {
 
 describe('image estimation', () => {
   it('charges a flat per-image cost (grok-build parity)', () => {
-    expect(estimateImageTokens(0)).toBe(0)
-    expect(estimateImageTokens(1)).toBe(IMAGE_TOKEN_ESTIMATE)
-    expect(estimateImageTokens(3)).toBe(IMAGE_TOKEN_ESTIMATE * 3)
+    expect(IMAGE_TOKEN_ESTIMATE).toBe(765)
+    expect(estimateMessageTokens({ role: 'user', content: [{ type: 'file', mediaType: 'image/png', data: 'x' }] }))
+      .toBe(IMAGE_TOKEN_ESTIMATE + 4)
   })
 })
 

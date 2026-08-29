@@ -49,11 +49,15 @@ export const CUSTOM_ID_PREFIX = 'custom/'
 // #55): every entry carries its family's window; unknown ids and custom
 // endpoints fall back to DEFAULT_MODEL_WINDOW. One place to flip a number.
 
-export interface ModelCatalogEntry {
-  id: string
-  label: string
+/** Context window + output cap for one model — the context gate's unit of supply. */
+export interface ModelWindow {
   contextWindow: number
   maxOutputTokens: number
+}
+
+export interface ModelCatalogEntry extends ModelWindow {
+  id: string
+  label: string
 }
 
 export const GOOGLE_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
@@ -91,7 +95,7 @@ export const ANTHROPIC_MODEL_CATALOG: ReadonlyArray<ModelCatalogEntry> = [
 ]
 
 /** Conservative fallback for unknown bare ids and custom endpoints (ticket #55). */
-export const DEFAULT_MODEL_WINDOW = { contextWindow: 131_072, maxOutputTokens: 8_192 } as const
+export const DEFAULT_MODEL_WINDOW: ModelWindow = { contextWindow: 131_072, maxOutputTokens: 8_192 }
 
 const ALL_MODEL_CATALOGS: ReadonlyArray<ReadonlyArray<ModelCatalogEntry>> = [
   GOOGLE_MODEL_CATALOG,
@@ -101,7 +105,7 @@ const ALL_MODEL_CATALOGS: ReadonlyArray<ReadonlyArray<ModelCatalogEntry>> = [
 ]
 
 /** Context window + output cap for a fully-qualified model id (ticket #55). */
-export function getModelWindow(rawModelId: string): { contextWindow: number; maxOutputTokens: number } {
+export function getModelWindow(rawModelId: string): ModelWindow {
   const ref = parseModelRef(rawModelId)
   for (const catalog of ALL_MODEL_CATALOGS) {
     const hit = catalog.find(entry => entry.id === ref.modelId)

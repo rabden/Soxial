@@ -12,9 +12,8 @@
 // nothing-deleted storage, and grok-build's tool-pair snap-forward rule,
 // overflow fit-ladder, degenerate-output rejection, and fail-open posture.
 
-import { estimateMessageTokens } from './context-budget'
+import { estimateMessageTokens, safeJson, tailBudgetTokens } from './context-budget'
 import { getModelWindow } from './models'
-import { tailBudgetTokens } from './context-budget'
 import { isContextLengthError } from './context-errors'
 import { logger } from './log'
 
@@ -88,20 +87,14 @@ export function splitForCompaction(messages: readonly any[], tailBudgetTokens: n
 
 const TOOL_RESULT_MAX_CHARS = 2_000
 const TOOL_ARGS_MAX_CHARS = 500
+/** Lossy-ladder cap for the whole serialized head when the summary request itself overflows. */
+export const LOSSY_SERIALIZED_MAX_CHARS = 24_000
 /** Lossy-ladder per-line cap when the summary request itself overflows. */
 const LOSSY_LINE_MAX_CHARS = 500
 const LOSSY_KEEP_LAST_LINES = 3
 
 function truncateChars(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + '…[truncated]' : text
-}
-
-function safeJson(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? ''
-  } catch {
-    return String(value)
-  }
 }
 
 function serializeMessage(msg: any): string {
@@ -258,7 +251,7 @@ export async function compactSessionHistory(params: CompactSessionParams): Promi
       if (isContextLengthError(e) && !lossy) {
         // Fit ladder: the summary request overflowed — degrade the input and retry.
         lossy = true
-        serialized = serializeHeadForSummary(head, params.priorSummary, 24_000)
+        serialized = serializeHeadForSummary(head, params.priorSummary, LOSSY_SERIALIZED_MAX_CHARS)
         logger.warn('compaction', 'summary request overflowed — retrying with lossy serialization')
       } else {
         logger.error('compaction', `summarizer failed — failing open: ${e?.message || e}`)

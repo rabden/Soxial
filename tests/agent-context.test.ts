@@ -154,6 +154,23 @@ describe('runAgent context gate', () => {
     expect(JSON.stringify(sentMessages)).not.toContain(COMPACTION_CARRIER_OPEN)
   })
 
+  it('re-checks the gate when rotating onto a smaller-window fallback model', async () => {
+    // gemini (1M window) is exhausted; glm (128k window) takes over — its
+    // threshold is below the stored snapshot, so the gate must fire for it.
+    mocks.providers.buildChatFallbackChain.mockReturnValue(['gemini-3.7-flash', 'glm-5.3'])
+    mocks.db.isModelExhaustedForAllKeys.mockImplementation((model: string) => model === 'gemini-3.7-flash')
+    mocks.db.getChatSessionSteps.mockReturnValue(storedTurn)
+    mocks.db.getChatSessionContextTokens.mockReturnValue(100_000) // ≥ glm threshold (94_872), ≪ gemini's
+
+    const run = baseRun()
+    await runAgent(run)
+
+    expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1)
+    const sentMessages = mocks.streamText.mock.calls[0][0].messages
+    expect(JSON.stringify(sentMessages[0])).toContain(COMPACTION_CARRIER_OPEN)
+    expect(run.onDone).toHaveBeenCalledWith('here is the answer')
+  })
+
   it('captures provider-reported usage as the session context snapshot', async () => {
     mocks.streamText.mockImplementation(() =>
       okStreamResult({ usage: { inputTokens: 5_000, outputTokens: 500 } }),
@@ -179,6 +196,22 @@ describe('runAgent context gate', () => {
     expect(run.onError).not.toHaveBeenCalled()
   })
 
+  it('surfaces a typed context error when overflow persists after the recovery budget', async () => {
+    mocks.db.getChatSessionSteps.mockReturnValue(storedTurn)
+    mocks.streamText.mockImplementation(() => failStreamResult('prompt is too long'))
+    const run = baseRun()
+    await runAgent(run)
+
+    // Gate compaction → resubmit → still overflowing → recovery budget spent
+    // → the run terminates naming the real cause.
+    expect(mocks.streamText).toHaveBeenCalledTimes(2)
+    expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1)
+    expect(run.onDone).not.toHaveBeenCalled()
+    expect(run.onError).toHaveBeenCalledTimes(1)
+    expect(run.onError.mock.calls[0][0]).toContain('outgrew the available models')
+    expect(run.onError.mock.calls[0][1]?.errorKind).toBe('context-overflow')
+  })
+
   it('fails open (run fails normally) when the summarizer is unavailable', async () => {
     mocks.db.getChatSessionSteps.mockReturnValue(storedTurn)
     mocks.streamText.mockImplementation(() => failStreamResult('prompt is too long'))
@@ -192,6 +225,7 @@ describe('runAgent context gate', () => {
     expect(mocks.aiGenerateText).toHaveBeenCalledTimes(1)
     expect(run.onDone).not.toHaveBeenCalled()
     expect(run.onError).toHaveBeenCalledTimes(1)
+    expect(run.onError.mock.calls[0][1]?.errorKind).toBe('context-overflow')
   })
 
   it('runs without compaction when no session is given', async () => {

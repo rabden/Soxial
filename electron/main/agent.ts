@@ -967,7 +967,7 @@ export function abortableSleep(ms: number, ac?: AbortController): Promise<void> 
 /** Structured terminal-failure information, consumed by IPC error mapping. */
 export interface AgentFailureInfo {
   /** Stable machine kind — mirrors the grok-build SamplingErrorKind idea. */
-  errorKind: 'all-models-exhausted' | 'no-credentials' | 'rate-limited' | 'auth' | 'fatal' | 'empty-completions'
+  errorKind: 'all-models-exhausted' | 'no-credentials' | 'rate-limited' | 'auth' | 'fatal' | 'empty-completions' | 'context-overflow'
   attemptedModels: string[]
   isRateLimited: boolean
 }
@@ -1041,6 +1041,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   const attemptedModels: string[] = []
   let sawRateLimit = false
   let sawEmptyTurn = false
+  let sawContextOverflow = false
   // Context-overflow recovery is allowed exactly once per run (spec #53):
   // after that, rotation is the only remaining option.
   let compactedThisRun = false
@@ -1113,8 +1114,9 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   let fullText = ''
 
   // Compacts the given transcript for this session and persists the result:
-  // summary + carrier-first transcript + refreshed context snapshot. Returns
-  // the compacted transcript, or null when compaction failed open (spec #53).
+  // pairing-repaired, carrier-first transcript + refreshed context snapshot.
+  // Returns the compacted transcript, or null when compaction failed open
+  // (spec #53).
   const compactForSession = async (currentMessages: any[], modelId: string): Promise<any[] | null> => {
     if (sessionId == null) return null
     const outcome = await compactSessionHistory({
@@ -1130,40 +1132,25 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
       logger.warn('agent', 'compaction failed open — proceeding uncompacted')
       return null
     }
+    // Post-compaction validation (spec #53): enforce tool-result pairing on
+    // the rebuilt history — the repair ladder synthesizes one typed result
+    // per dangling call id, so the compacted transcript is always
+    // provider-safe.
+    const compactedMessages = repairModelMessagePairing(outcome.compactedMessages)
     try {
       updateChatSessionContextSummary(sessionId, outcome.summary)
-      updateChatSessionSteps(sessionId, outcome.compactedMessages, userCount)
+      updateChatSessionSteps(sessionId, compactedMessages, userCount)
       // Snapshot the compacted context so the next gate estimate reflects
       // reality instead of the stale pre-compaction size.
-      updateChatSessionContextTokens(sessionId, estimateContextTokens(system, outcome.compactedMessages))
+      updateChatSessionContextTokens(sessionId, estimateContextTokens(system, compactedMessages))
     } catch (e: any) {
       logger.error('agent', `failed to persist compaction: ${e?.message || e}`)
     }
-    logger.info('agent', `compacted ${currentMessages.length} → ${outcome.compactedMessages.length} model messages`)
-    return outcome.compactedMessages
-  }
-
-  // ─── Context gate (run boundary, spec #53) ────────────────────────────────
-  // Compact before sampling when the estimated context crosses the
-  // high-water mark of the chain head's window. Provider-reported usage is
-  // the ground truth; the chars/4 estimator covers sessions without a
-  // snapshot. Overflow later in the run is handled by the error-recovery
-  // path below (compact-and-resubmit once).
-  if (sessionId != null && modelMessages.length > 0) {
-    const gateModel = fallbackChain[0] || 'gemini-3.5-flash-lite'
-    const threshold = compactionThresholdTokens(getModelWindow(gateModel))
-    const storedTokens = getChatSessionContextTokens(sessionId)
-    const estimate = storedTokens != null
-      ? storedTokens + estimateContextTokens('', appendedSinceLastResponse)
-      : estimateContextTokens(system, modelMessages)
-    if (estimate >= threshold) {
-      logger.warn('agent', `context estimate ${estimate} ≥ threshold ${threshold} for ${gateModel} — compacting before sampling`)
-      const compacted = await compactForSession(modelMessages, gateModel)
-      if (compacted) {
-        modelMessages = compacted
-        options?.onModelMessages?.(modelMessages)
-      }
-    }
+    // The refreshed snapshot now covers the appended messages too — counting
+    // them again would double-charge the next gate estimate.
+    appendedSinceLastResponse = []
+    logger.info('agent', `compacted ${currentMessages.length} → ${compactedMessages.length} model messages (${outcome.tailUserCount} user turns kept verbatim)`)
+    return compactedMessages
   }
 
   for (let i = 0; i < fallbackChain.length; i++) {
@@ -1175,6 +1162,30 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     if (!options?.skipRateLimitCheck && isModelExhaustedForAllKeys(currentModel)) {
       logger.warn('agent', `model ${currentModel} exhausted for all keys, skipping`)
       continue
+    }
+
+    // ─── Context gate, re-checked per model attempt (spec #53) ──────────────
+    // Compact before sampling when the estimated context crosses this
+    // model's high-water mark. Provider-reported usage is the ground truth;
+    // the chars/4 estimator covers sessions without a snapshot. Re-checking
+    // per attempt is what protects model switches onto smaller-window
+    // fallbacks (e.g. 1M Gemini → 128k GLM); a prior gate compaction
+    // already shrank the persisted snapshot, so this converges instead of
+    // re-summarizing needlessly.
+    if (sessionId != null && modelMessages.length > 0) {
+      const threshold = compactionThresholdTokens(getModelWindow(currentModel))
+      const storedTokens = getChatSessionContextTokens(sessionId)
+      const estimate = storedTokens != null
+        ? storedTokens + estimateContextTokens('', appendedSinceLastResponse)
+        : estimateContextTokens(system, modelMessages)
+      if (estimate >= threshold) {
+        logger.warn('agent', `context estimate ${estimate} ≥ threshold ${threshold} for ${currentModel} — compacting before sampling`)
+        const compacted = await compactForSession(modelMessages, currentModel)
+        if (compacted) {
+          modelMessages = compacted
+          options?.onModelMessages?.(modelMessages)
+        }
+      }
     }
 
     attemptedModels.push(currentModel)
@@ -1491,7 +1502,12 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
               options?.onModelMessages?.(modelMessages)
               continue
             }
-            // Fail open → fall through to model rotation below.
+            // Recovery failed open — the overflow is unresolved.
+            sawContextOverflow = true
+          } else if (isContextLengthError(e)) {
+            // Overflow persisted even after this run's compaction budget —
+            // remember it so the terminal failure names the real cause.
+            sawContextOverflow = true
           }
 
           if (isTransientError(e)) {
@@ -1532,11 +1548,13 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   onError(
     rateLimitedChain
       ? 'All available models hit rate limits. Wait for the cooldown or add another provider key in Settings.'
-      : sawEmptyTurn
-        ? 'The model returned empty responses. Retry in a moment — if it keeps happening, switch models in Settings.'
-        : 'All available models failed. Check your provider credentials in Settings or try another model.',
+      : sawContextOverflow
+        ? 'The conversation outgrew the available models even after compaction. Start a new session, or switch to a model with a larger context window in Settings.'
+        : sawEmptyTurn
+          ? 'The model returned empty responses. Retry in a moment — if it keeps happening, switch models in Settings.'
+          : 'All available models failed. Check your provider credentials in Settings or try another model.',
     {
-      errorKind: attemptedModels.length === 0 ? 'no-credentials' : rateLimitedChain ? 'rate-limited' : sawEmptyTurn ? 'empty-completions' : 'all-models-exhausted',
+      errorKind: attemptedModels.length === 0 ? 'no-credentials' : rateLimitedChain ? 'rate-limited' : sawContextOverflow ? 'context-overflow' : sawEmptyTurn ? 'empty-completions' : 'all-models-exhausted',
       attemptedModels,
       isRateLimited: rateLimitedChain,
     },

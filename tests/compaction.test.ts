@@ -260,22 +260,24 @@ describe('compactSessionHistory', () => {
     expect(summarize).not.toHaveBeenCalled()
   })
 
-  it('exposes the raw repair path for the caller', async () => {
-    // The caller (agent.ts) runs repairModelMessagePairing on the compacted
-    // output — the engine itself must not strip or reorder tool pairs.
+  it('keeps assistant tool-calls glued to their results in the tail', async () => {
+    // The engine guarantees the ordering invariant by construction (the
+    // snap-forward rule); the caller additionally runs
+    // repairModelMessagePairing over the compacted output before persisting.
     const messages = [...baseMessages, ...toolExchange('t9', 'search', 'r'.repeat(20)), userMsg('last')]
     const summarize = vi.fn(async () => summaryText)
     const result = await compactSessionHistory({
       system: 'SYS', modelMessages: messages, modelId: 'glm-5.3', priorSummary: null, summarize,
     })
     const tail = result!.compactedMessages.slice(1)
-    const toolIdx = tail.findIndex(m => m.role === 'tool')
-    if (toolIdx > 0) expect(tail[toolIdx - 1].role).toBe('assistant')
+    for (let i = 0; i < tail.length; i++) {
+      if (tail[i].role === 'tool') expect(tail[i - 1].role, `tool message at ${i} needs its assistant call before it`).toBe('assistant')
+    }
   })
 })
 
-// Local helper mirroring the budget math so tests stay readable.
-// glm-5.3 (128k window family) clamps to the same preserve-recent cap.
+// Local helper: glm-5.3 (128k window family) clamps to the same
+// preserve-recent cap as the test window below.
 import { tailBudgetTokens } from '../electron/main/context-budget'
 function tailBudgetOf(_modelId: string): number {
   return tailBudgetTokens(WIN)
