@@ -287,6 +287,12 @@ function initSchema(db: Database.Database) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN title_turn INTEGER')
   }
 
+  // Migration: persisted ask_user question (ticket #69) — survives an app
+  // close mid-turn so the interaction isn't silently lost.
+  if (!cols.some((c: any) => c.name === 'pending_question')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN pending_question TEXT')
+  }
+
   // Migration: persist chat attachments for image-augmented messages
   const messageCols = db.pragma('table_info(chat_messages)') as any[]
   if (!messageCols.some((c: any) => c.name === 'attachments_json')) {
@@ -759,6 +765,22 @@ export function updateChatSessionTitleSmart(sessionId: number, title: string, ki
 /** Manual rename — wins forever (blocks all future automatic writes). */
 export function renameChatSession(id: number, title: string) {
   getDb().prepare("UPDATE chat_sessions SET title = ?, title_kind = 'manual', updated_at = datetime('now') WHERE id = ?").run(title, id)
+}
+
+/** Persisted ask_user question (ticket #69): survives an app close mid-turn. */
+export function getChatSessionPendingQuestion(sessionId: number): { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] } | null {
+  const row = getDb().prepare('SELECT pending_question FROM chat_sessions WHERE id = ?').get(sessionId) as any
+  if (!row?.pending_question) return null
+  try {
+    return JSON.parse(row.pending_question)
+  } catch {
+    return null
+  }
+}
+
+export function updateChatSessionPendingQuestion(sessionId: number, q: unknown | null) {
+  getDb().prepare('UPDATE chat_sessions SET pending_question = ? WHERE id = ?')
+    .run(q == null ? null : JSON.stringify(q), sessionId)
 }
 
 /** Step-boundary persistence (ticket #68): the assistant row exists from the
