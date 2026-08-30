@@ -1053,6 +1053,18 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   // Context-overflow recovery is allowed exactly once per run (spec #53):
   // after that, rotation is the only remaining option.
   let compactedThisRun = false
+  // Mid-turn compaction (ticket #70): the safe-point check in prepareStep.
+  // `lastStepUsageTokens` is the last completed step's provider-reported
+  // input+output — ground truth for the request size at that moment.
+  // At most ONE mid-turn compaction per turn; a failed attempt suppresses
+  // for the rest of the turn (the overflow error-recovery path stays the
+  // backstop). After a swap, `swappedBase`/`swapResponseOffset` keep every
+  // persist on the compacted lineage — responses that predate the swap live
+  // in the carrier summary and must never flow back in.
+  let lastStepUsageTokens: number | null = null
+  let midTurnCompacted = false
+  let swappedBase: any[] | null = null
+  let swapResponseOffset = 0
 
   const userCount = messages.filter(m => m.role === 'user').length
 
@@ -1256,6 +1268,9 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
       // Counter resets when progress is made — only CONSECUTIVE no-progress failures count.
       while (true) {
         fullText = ''
+        // Attempt-scoped response messages: a retry's responses postdate any
+        // mid-turn swap, so the lineage offset restarts with the attempt.
+        swapResponseOffset = 0
         let result: any = null
         const prevMsgCount = modelMessages.length
 
@@ -1310,7 +1325,44 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
 
           result = streamText({
             ...runOptions,
-            prepareStep: ({ stepNumber, messages: stepMessages, responseMessages: stepResponseMessages }) => {
+            prepareStep: async ({ stepNumber, messages: stepMessages, responseMessages: stepResponseMessages }) => {
+              // ── Mid-turn compaction, safe point (ticket #70) ─────────────
+              // prepareStep runs BETWEEN steps: every prior step — including
+              // its tool executions — is complete (grok-build's post-tool-
+              // batch preflight). Nothing in flight is ever cut: the check
+              // swaps the next step's input to carrier + tail and the same
+              // turn continues (the messages override carries forward).
+              let effectiveStepMessages = stepMessages
+              let swappedThisStep = false
+              if (sessionId != null && stepNumber > 0 && !midTurnCompacted && modelMessages.length > 0) {
+                try {
+                  const threshold = compactionThresholdTokens()
+                  const sinceLastStep = stepResponseMessages.slice(swapResponseOffset)
+                  const liveEstimate = lastStepUsageTokens != null
+                    ? lastStepUsageTokens + estimateContextTokens('', sinceLastStep)
+                    : estimateContextTokens(system, [...modelMessages, ...stepResponseMessages])
+                  if (liveEstimate >= threshold) {
+                    // Claim the once-per-turn slot synchronously — the
+                    // compaction below is async, and later boundaries must
+                    // not race it. A failed compaction keeps the slot
+                    // claimed: suppressed for the turn, fail open.
+                    midTurnCompacted = true
+                    logger.warn('agent', `mid-turn context estimate ${liveEstimate} ≥ threshold ${threshold} — compacting at the step boundary (step ${stepNumber})`)
+                    const compacted = await compactForSession([...modelMessages, ...stepResponseMessages], currentModel)
+                    if (compacted) {
+                      swappedBase = compacted
+                      swapResponseOffset = stepResponseMessages.length
+                      modelMessages = compacted
+                      effectiveStepMessages = compacted
+                      swappedThisStep = true
+                      options?.onModelMessages?.(modelMessages)
+                    }
+                  }
+                } catch (e: any) {
+                  logger.warn('agent', `mid-turn compaction check failed open: ${e?.message || e}`)
+                }
+              }
+
               // Step-boundary checkpoint (ticket #68): prepareStep runs between
               // steps, when everything from previous steps is complete —
               // persist the transcript so a crash costs at most the step in
@@ -1320,7 +1372,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
               if (sessionId != null) {
                 try {
                   const checkpoint = stepNumber > 0
-                    ? [...modelMessages, ...stepResponseMessages]
+                    ? [...modelMessages, ...stepResponseMessages.slice(swapResponseOffset)]
                     : modelMessages
                   updateChatSessionSteps(sessionId, checkpoint, userCount)
                   onCheckpoint?.(stepNumber > 0 ? fullText : '')
@@ -1351,7 +1403,8 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
                 }
               }
 
-              if (extra.length > 0) return { messages: [...stepMessages, ...extra] }
+              if (extra.length > 0) return { messages: [...effectiveStepMessages, ...extra] }
+              if (swappedThisStep) return { messages: effectiveStepMessages }
             },
             onError: ({ error }) => {
               logger.error('agent', `stream error: ${(error as Error)?.message || error}`)
@@ -1417,13 +1470,16 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
               case 'finish-step': {
                 // Live context size (spec #53 follow-up): each sampling step's
                 // usage is ground truth for the full request size at that
-                // moment — feeds the renderer's context ring mid-turn.
+                // moment — feeds the renderer's context ring mid-turn and the
+                // mid-turn compaction gate (ticket #70).
                 // (ai@7 renamed this part 'finish-step'; 'step-finish' never
                 // fired, which silently killed the live feed until now.)
                 const usage: any = (part as any).usage
                 const input = usage?.inputTokens
-                if (onContextTokens && Number.isFinite(input) && input > 0) {
-                  onContextTokens(input + (Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0), currentModel)
+                if (Number.isFinite(input) && input > 0) {
+                  const stepTokens = input + (Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0)
+                  lastStepUsageTokens = stepTokens
+                  onContextTokens?.(stepTokens, currentModel)
                 }
                 break
               }
@@ -1470,12 +1526,15 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
             break
           }
 
-          // Persist accumulated messages for next turn's round-trip.
+          // Persist accumulated messages for next turn's round-trip. After a
+          // mid-turn swap (ticket #70) the base is the carrier-first
+          // transcript and responses that predate the swap live in the
+          // carrier summary — only post-swap responses append.
           let responseMsgs: any[] = []
           try {
             responseMsgs = await result.responseMessages
           } catch { /* stream produced no response messages */ }
-          const finalMessages = [...modelMessages, ...responseMsgs]
+          const finalMessages = [...modelMessages, ...responseMsgs.slice(swapResponseOffset)]
           if (sessionId != null) {
             try {
               updateChatSessionSteps(sessionId, finalMessages, userCount)

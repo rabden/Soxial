@@ -330,3 +330,66 @@ describe('step-boundary persistence (ticket #68)', () => {
     expect(repairCalls.length).toBeLessThanOrEqual(1)
   })
 })
+
+describe('mid-turn compaction (ticket #70)', () => {
+  // ~187k tokens at chars/4 — crosses the flat 180k line on its own.
+  const HUGE = 'x'.repeat(750_000)
+
+  it('swaps the step input to carrier + tail when the safe-point estimate crosses the line', async () => {
+    mocks.streamText.mockImplementation((opts: any) => {
+      const stream = (async function* () {
+        // prepareStep for step N+1 fires between steps — await it here, the
+        // same point where the real SDK does.
+        opts.__midTurnReturn = await opts.prepareStep?.({
+          stepNumber: 1,
+          messages: opts.messages,
+          responseMessages: [{ role: 'assistant', content: HUGE }],
+        })
+        yield { type: 'text-delta', text: 'here is the answer' }
+        yield { type: 'finish-step', usage: {} }
+      })()
+      return { stream, responseMessages: Promise.resolve([]), steps: Promise.resolve([]), totalUsage: Promise.resolve({}) }
+    })
+
+    const run = baseRun()
+    await runAgent(run)
+
+    // Compaction ran and persisted (possibly chunked — several summarizer passes).
+    expect(mocks.aiGenerateText.mock.calls.length).toBeGreaterThanOrEqual(1)
+    expect(mocks.db.updateChatSessionContextSummary).toHaveBeenCalledTimes(1)
+    // The next step's input is the carrier-first compacted transcript.
+    const swapped = mocks.streamText.mock.calls[0][0].__midTurnReturn
+    expect(swapped?.messages?.[0]?.role).toBe('user')
+    expect(JSON.stringify(swapped.messages[0])).toContain(COMPACTION_CARRIER_OPEN)
+    // The end-of-run persist is carrier-first too — the pre-swap responses
+    // live in the carrier summary and never flow back in.
+    const persistCalls = mocks.db.updateChatSessionSteps.mock.calls
+    const finalCall = persistCalls[persistCalls.length - 1]
+    expect(JSON.stringify(finalCall[1][0])).toContain(COMPACTION_CARRIER_OPEN)
+    // The turn continued seamlessly and completed.
+    expect(run.onDone).toHaveBeenCalledWith('here is the answer')
+    expect(run.onError).not.toHaveBeenCalled()
+  })
+
+  it('compacts at most once per turn even if later boundaries still cross', async () => {
+    mocks.streamText.mockImplementation((opts: any) => {
+      const stream = (async function* () {
+        for (const step of [1, 2, 3]) {
+          await opts.prepareStep?.({
+            stepNumber: step,
+            messages: opts.messages,
+            responseMessages: [{ role: 'assistant', content: HUGE }],
+          })
+        }
+        yield { type: 'text-delta', text: 'here is the answer' }
+        yield { type: 'finish-step', usage: {} }
+      })()
+      return { stream, responseMessages: Promise.resolve([]), steps: Promise.resolve([]), totalUsage: Promise.resolve({}) }
+    })
+
+    await runAgent(baseRun())
+
+    expect(mocks.streamText).toHaveBeenCalledTimes(1)
+    expect(mocks.db.updateChatSessionContextSummary).toHaveBeenCalledTimes(1)
+  })
+})
