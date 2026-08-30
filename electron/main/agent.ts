@@ -1,6 +1,7 @@
 import { streamText, generateText as aiGenerateText, isStepCount } from 'ai'
 import { isUnusableCompletion } from './agent-completion'
 import { getProfile, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb, getCustomProviderCredential, getChatSessionContextSummary, getChatSessionContextTokens, updateChatSessionContextTokens, updateChatSessionContextSummary } from './db'
+import { userMessagesFingerprint } from './steps-storage'
 import { normalizeModelId, parseModelRef, getModelWindow } from './models'
 import { compactSessionHistory, isCompactionCarrier } from './compaction'
 import { isContextLengthError } from './context-errors'
@@ -1081,10 +1082,22 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
       logger.warn('agent', `repaired ${repaired.length - stored.steps.length} dangling tool call(s) in the stored transcript`)
       stored.steps = repaired
       try {
-        updateChatSessionSteps(sessionId!, repaired, stored.userCount)
+        updateChatSessionSteps(sessionId!, repaired, stored.userCount, userMessagesFingerprint(messages, stored.userCount))
       } catch (e: any) {
         logger.warn('agent', `failed to persist repaired transcript: ${e?.message || e}`)
       }
+    }
+  }
+  // Drift check (ticket #71): the fingerprint pins which app-history user
+  // messages the stored transcript covers. If the history the renderer sent
+  // no longer matches (edited/deleted/reordered), the stored lineage is
+  // stale — discard it and rebuild from the raw history instead of appending
+  // onto it. UI history is untouched.
+  if (stored && stored.steps.length > 0 && stored.userCount > 0 && stored.fingerprint) {
+    const expected = userMessagesFingerprint(messages, stored.userCount)
+    if (stored.fingerprint !== expected) {
+      logger.warn('agent', `stored transcript fingerprint mismatch — rebuilding from history (${stored.steps.length} stored messages discarded)`)
+      stored.steps = []
     }
   }
   const lastMsg = messages[messages.length - 1]
@@ -1177,7 +1190,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     const compactedMessages = repairModelMessagePairing(outcome.compactedMessages)
     try {
       updateChatSessionContextSummary(sessionId, outcome.summary)
-      updateChatSessionSteps(sessionId, compactedMessages, userCount)
+      updateChatSessionSteps(sessionId, compactedMessages, userCount, userMessagesFingerprint(messages, userCount))
       // Snapshot the compacted context so the next gate estimate reflects
       // reality instead of the stale pre-compaction size.
       updateChatSessionContextTokens(sessionId, estimateContextTokens(system, compactedMessages))
@@ -1374,7 +1387,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
                   const checkpoint = stepNumber > 0
                     ? [...modelMessages, ...stepResponseMessages.slice(swapResponseOffset)]
                     : modelMessages
-                  updateChatSessionSteps(sessionId, checkpoint, userCount)
+                  updateChatSessionSteps(sessionId, checkpoint, userCount, userMessagesFingerprint(messages, userCount))
                   onCheckpoint?.(stepNumber > 0 ? fullText : '')
                 } catch (e: any) {
                   logger.warn('agent', `step checkpoint persist failed: ${e?.message || e}`)
@@ -1537,7 +1550,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
           const finalMessages = [...modelMessages, ...responseMsgs.slice(swapResponseOffset)]
           if (sessionId != null) {
             try {
-              updateChatSessionSteps(sessionId, finalMessages, userCount)
+              updateChatSessionSteps(sessionId, finalMessages, userCount, userMessagesFingerprint(messages, userCount))
             } catch (e) { logger.error('agent', 'failed to persist steps', e) }
             // Context snapshot (spec #53): the last sampling step's input
             // tokens are the full request size at the end of the turn; its

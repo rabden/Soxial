@@ -53,6 +53,7 @@ vi.mock('ai', () => ({
 import { runAgent } from '../electron/main/agent'
 import { COMPACTION_CARRIER_OPEN } from '../electron/main/compaction'
 import { compactionThresholdTokens } from '../electron/main/context-budget'
+import { userMessagesFingerprint } from '../electron/main/steps-storage'
 
 /** The flat compaction line (owner decision): 180k tokens, model-independent. */
 const THRESHOLD = compactionThresholdTokens()
@@ -138,6 +139,7 @@ describe('runAgent context gate', () => {
       1,
       expect.arrayContaining([expect.objectContaining({ role: 'user' })]),
       1,
+      expect.any(String),
     )
     expect(run.onDone).toHaveBeenCalledWith('here is the answer')
     expect(run.onError).not.toHaveBeenCalled()
@@ -391,5 +393,44 @@ describe('mid-turn compaction (ticket #70)', () => {
 
     expect(mocks.streamText).toHaveBeenCalledTimes(1)
     expect(mocks.db.updateChatSessionContextSummary).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('transcript drift check (ticket #71)', () => {
+  it('rebuilds from raw history when the stored fingerprint mismatches', async () => {
+    mocks.db.getChatSessionSteps.mockReturnValue({
+      steps: [
+        { role: 'user', content: 'old timeline message' },
+        { role: 'assistant', content: 'old answer' },
+      ],
+      userCount: 1,
+      fingerprint: 'stale-fingerprint-from-an-edited-history',
+    })
+    // Same turn count as stored, but the content differs — the lineage is stale.
+    await runAgent(baseRun({ messages: [{ role: 'user' as const, content: 'a different first question' }] }))
+
+    const sent = mocks.streamText.mock.calls[0][0].messages
+    expect(JSON.stringify(sent)).not.toContain('old timeline message')
+    expect(JSON.stringify(sent)).toContain('a different first question')
+    // The rebuilt transcript persists with a fresh fingerprint.
+    const finalPersist = mocks.db.updateChatSessionSteps.mock.calls.at(-1)
+    expect(JSON.stringify(finalPersist![1])).toContain('a different first question')
+    expect(finalPersist![3]).toBe(userMessagesFingerprint([{ role: 'user', content: 'a different first question' }], 1))
+  })
+
+  it('keeps the stored lineage when the fingerprint matches', async () => {
+    const history = [{ role: 'user', content: 'same question' }]
+    mocks.db.getChatSessionSteps.mockReturnValue({
+      steps: [
+        { role: 'user', content: 'same question' },
+        { role: 'assistant', content: 'stored content kept' },
+      ],
+      userCount: 1,
+      fingerprint: userMessagesFingerprint(history, 1),
+    })
+    await runAgent(baseRun({ messages: history }))
+
+    const sent = mocks.streamText.mock.calls[0][0].messages
+    expect(JSON.stringify(sent)).toContain('stored content kept')
   })
 })
