@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
-import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, getChatSessionContextTokens, getChatSessionSteps, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
+import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, addPendingChatMessage, updateChatMessageContent, finalizeChatMessage, updateChatSessionTitle, getChatSessionContextSummary, getChatSessionContextTokens, getChatSessionSteps, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
 import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
@@ -1396,6 +1396,10 @@ function setupIpc() {
 
     activeChatRunsCount++
     const sid = sessionId ?? 0
+    // Step-boundary persistence (ticket #68): the assistant row exists from
+    // turn start with pending=1; checkpoints flush partial content into it;
+    // the renderer finalizes it on completion (or it renders as interrupted).
+    const assistantMessageId = sessionId != null ? addPendingChatMessage(sessionId) : null
     const run: ActiveChatRun = {
       abortController: new AbortController(),
       injectedMessages: []
@@ -1432,6 +1436,9 @@ function setupIpc() {
           onReasoning: text => mainWindow?.webContents.send('chat:reasoning', { text, sessionId: sid }),
           onTransientRetry: info => mainWindow?.webContents.send('chat:transientRetry', { ...info, sessionId: sid }),
           onContextTokens: (tokens, model) => mainWindow?.webContents.send('chat:contextTokens', { sessionId: sid, tokens, model, compactsAtTokens: compactionThresholdTokens() }),
+          onCheckpoint: textSoFar => {
+            if (assistantMessageId != null && textSoFar) updateChatMessageContent(assistantMessageId, textSoFar)
+          },
           options: {
             ...options,
           },
@@ -1454,7 +1461,7 @@ function setupIpc() {
       })
 
       logger.info('main', `chat:send done — ${chunks.join('').length} chars`)
-      return { fullText: chunks.join('') }
+      return { fullText: chunks.join(''), assistantMessageId }
     } finally {
       activeChatRuns.delete(sid)
       activeChatRunsCount--
@@ -1518,6 +1525,13 @@ function setupIpc() {
 
   ipcMain.handle('chat:addMessage', (_e, sessionId: number, role: string, content: string, reasoning?: string, toolCallsJson?: string, attachmentsJson?: string) => {
     return addChatMessage(sessionId, role, content, reasoning, toolCallsJson, attachmentsJson)
+  })
+
+  // Step-boundary persistence (ticket #68): completion finalizes the pending
+  // assistant row created at turn start instead of inserting a second one.
+  ipcMain.handle('chat:finalizeAssistantMessage', (_e, id: number, content: string, reasoning?: string) => {
+    finalizeChatMessage(id, content, reasoning)
+    return { success: true }
   })
 
   ipcMain.handle('chat:updateTitle', (_e, sessionId: number, title: string) => {

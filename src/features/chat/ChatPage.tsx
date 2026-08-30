@@ -366,6 +366,9 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
         content: m.content || "",
         steps: info,
         attachments: parseAttachments(m.attachments_json),
+        // Step-boundary persistence (ticket #68): a row whose turn never
+        // finalized renders with an interrupted marker.
+        interrupted: m.pending === 1,
       };
     });
     
@@ -979,8 +982,15 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       ? JSON.stringify({ version: 2, steps: completedSteps })
       : undefined;
 
-    // Side effects OUTSIDE updater (StrictMode invokes updaters twice → double DB inserts)
-    void window.api.addMessage(sid, "assistant", finalContent, stepsJson, undefined);
+    // Side effects OUTSIDE updater (StrictMode invokes updaters twice → double DB inserts).
+    // Step-boundary persistence (ticket #68): the row was created at turn
+    // start (pending) — completion finalizes it; a missing id (no-session
+    // paths) falls back to inserting.
+    if (result.assistantMessageId != null) {
+      void window.api.finalizeAssistantMessage(result.assistantMessageId, finalContent, stepsJson);
+    } else {
+      void window.api.addMessage(sid, "assistant", finalContent, stepsJson, undefined);
+    }
 
     const prevMsgCount = sessionStates[sid]?.messages.length || 0;
     const userMsgCount = Math.ceil((prevMsgCount + 2) / 2);
@@ -1158,6 +1168,15 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                       {messages.map((msg, i) => (
                         <Message key={i} from={msg.role}>
                           <MessageContent>
+                            {msg.role === "assistant" && msg.interrupted && (
+                              <div
+                                data-testid="interrupted-marker"
+                                className="mb-2 flex items-center gap-1.5 text-[10px] font-medium text-amber-400/80"
+                              >
+                                <span className="size-1.5 rounded-full bg-amber-400/80" />
+                                Interrupted — the app closed before this turn finished
+                              </div>
+                            )}
                             {msg.role === "user" && msg.attachments?.length ? (
                               <div className="mb-2">
                                 <PostAttachments

@@ -986,6 +986,10 @@ export interface RunAgentRequest {
   onTransientRetry?: (info: { attempt: number; maxAttempts: number; backoffMs: number; model: string }) => void
   /** Live context size per completed sampling step (usage ground truth). */
   onContextTokens?: (tokens: number, model: string) => void
+  /** Step-boundary checkpoint (ticket #68): fires between sampling steps with
+   * the text produced so far, so the caller can flush partial assistant
+   * content. The model-transcript checkpoint itself is persisted directly. */
+  onCheckpoint?: (textSoFar: string) => void
   options?: AgentOptions
   toolsOverride?: Record<string, any>
   systemPromptOverride?: string
@@ -1007,6 +1011,7 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
     onReasoning,
     onTransientRetry,
     onContextTokens,
+    onCheckpoint,
     options,
     toolsOverride,
     systemPromptOverride,
@@ -1054,6 +1059,22 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
   // Reuse stored ModelMessages from last turn when possible (preserves
   // reasoning signatures + tool-call round-trip integrity).
   const stored = sessionId != null ? getChatSessionSteps(sessionId) : null
+  // Repair, don't resume (spec #65, ticket #68): a crash mid-turn leaves
+  // assistant tool calls without results in the stored transcript. Synthesize
+  // cancelled results at this write boundary — before the transcript is
+  // reused as sampling base — and persist the repair back. Idempotent.
+  if (stored && stored.steps.length > 0) {
+    const repaired = repairModelMessagePairing(stored.steps)
+    if (repaired.length !== stored.steps.length) {
+      logger.warn('agent', `repaired ${repaired.length - stored.steps.length} dangling tool call(s) in the stored transcript`)
+      stored.steps = repaired
+      try {
+        updateChatSessionSteps(sessionId!, repaired, stored.userCount)
+      } catch (e: any) {
+        logger.warn('agent', `failed to persist repaired transcript: ${e?.message || e}`)
+      }
+    }
+  }
   const lastMsg = messages[messages.length - 1]
   let baseMessages: any[]
   // Model messages appended beyond the last provider response — the delta the
@@ -1289,7 +1310,25 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
 
           result = streamText({
             ...runOptions,
-            prepareStep: ({ stepNumber, messages: stepMessages }) => {
+            prepareStep: ({ stepNumber, messages: stepMessages, responseMessages: stepResponseMessages }) => {
+              // Step-boundary checkpoint (ticket #68): prepareStep runs between
+              // steps, when everything from previous steps is complete —
+              // persist the transcript so a crash costs at most the step in
+              // flight. Step 0 anchors `steps_user_count` at turn start, so a
+              // crash mid-first-step still appends only newer turns next send.
+              // The final end-of-run persist below stays the finisher.
+              if (sessionId != null) {
+                try {
+                  const checkpoint = stepNumber > 0
+                    ? [...modelMessages, ...stepResponseMessages]
+                    : modelMessages
+                  updateChatSessionSteps(sessionId, checkpoint, userCount)
+                  onCheckpoint?.(stepNumber > 0 ? fullText : '')
+                } catch (e: any) {
+                  logger.warn('agent', `step checkpoint persist failed: ${e?.message || e}`)
+                }
+              }
+
               const extra: any[] = []
 
               // Stationarity nudge (grok-build pattern): below the hard-stop
@@ -1375,10 +1414,12 @@ export async function runAgent(request: RunAgentRequest): Promise<void> {
                 logger.info('agent', `tool-result: ${part.toolName}`)
                 break
               }
-              case 'step-finish': {
+              case 'finish-step': {
                 // Live context size (spec #53 follow-up): each sampling step's
                 // usage is ground truth for the full request size at that
                 // moment — feeds the renderer's context ring mid-turn.
+                // (ai@7 renamed this part 'finish-step'; 'step-finish' never
+                // fired, which silently killed the live feed until now.)
                 const usage: any = (part as any).usage
                 const input = usage?.inputTokens
                 if (onContextTokens && Number.isFinite(input) && input > 0) {

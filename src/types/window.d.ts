@@ -63,6 +63,7 @@ interface Window {
     getSessions: () => Promise<any[]>
     getMessages: (sessionId: number) => Promise<any[]>
     addMessage: (sessionId: number, role: string, content: string, reasoning?: string, toolCallsJson?: string, attachmentsJson?: string) => Promise<number>
+    finalizeAssistantMessage: (id: number, content: string, reasoning?: string) => Promise<{ success: boolean }>
     updateSessionTitle: (sessionId: number, title: string) => Promise<any>
     deleteSession: (sessionId: number) => Promise<any>
     generateTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>

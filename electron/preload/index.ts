@@ -98,6 +98,7 @@ const api = {
   getSessions: () => ipcRenderer.invoke('chat:getSessions'),
   getMessages: (sessionId: number) => ipcRenderer.invoke('chat:getMessages', sessionId),
   addMessage: (sessionId: number, role: string, content: string, reasoning?: string, toolCallsJson?: string, attachmentsJson?: string) => ipcRenderer.invoke('chat:addMessage', sessionId, role, content, reasoning, toolCallsJson, attachmentsJson),
+  finalizeAssistantMessage: (id: number, content: string, reasoning?: string) => ipcRenderer.invoke('chat:finalizeAssistantMessage', id, content, reasoning),
   updateSessionTitle: (sessionId: number, title: string) => ipcRenderer.invoke('chat:updateTitle', sessionId, title),
   deleteSession: (sessionId: number) => ipcRenderer.invoke('chat:deleteSession', sessionId),
   generateTitle: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:generateTitle', sessionId, messages),

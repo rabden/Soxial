@@ -62,7 +62,7 @@ function okStreamResult(opts: { text?: string; responseMessages?: any[]; usage?:
   return {
     stream: (async function* () {
       yield { type: 'text-delta', text }
-      yield { type: 'step-finish', usage: opts.usage ?? {} }
+      yield { type: 'finish-step', usage: opts.usage ?? {} }
     })(),
     responseMessages: Promise.resolve(opts.responseMessages ?? []),
     steps: Promise.resolve(opts.usage ? [{ usage: opts.usage }] : []),
@@ -245,5 +245,88 @@ describe('runAgent context gate', () => {
     expect(mocks.aiGenerateText).not.toHaveBeenCalled()
     expect(mocks.db.updateChatSessionContextTokens).not.toHaveBeenCalled()
     expect(run.onDone).toHaveBeenCalled()
+  })
+})
+
+describe('step-boundary persistence (ticket #68)', () => {
+  it('persists the transcript at each step boundary and anchors userCount at turn start', async () => {
+    const onCheckpoint = vi.fn()
+    mocks.streamText.mockImplementation((opts: any) => {
+      // Simulate the SDK invoking prepareStep at each step boundary — step 0
+      // (turn start) and step 1 (after the first step's response messages).
+      opts.prepareStep?.({ stepNumber: 0, messages: opts.messages, responseMessages: [] })
+      opts.prepareStep?.({
+        stepNumber: 1,
+        messages: opts.messages,
+        responseMessages: [{ role: 'assistant', content: 'step one output' }],
+      })
+      return okStreamResult()
+    })
+
+    const run = baseRun({ onCheckpoint })
+    await runAgent(run)
+
+    const calls = mocks.db.updateChatSessionSteps.mock.calls
+    // Step 0: the base transcript, with steps_user_count anchored at turn start.
+    expect(calls[0][2]).toBe(1)
+    expect(calls[0][1]).toHaveLength(1)
+    // Step 1: base + the completed step's response messages.
+    expect(JSON.stringify(calls[1][1])).toContain('step one output')
+    expect(calls[1][2]).toBe(1)
+    // The end-of-run persist remains the final write.
+    expect(calls[calls.length - 1][2]).toBe(1)
+    // The caller learned about the checkpoints (partial content flush).
+    expect(onCheckpoint).toHaveBeenCalledTimes(2)
+    expect(onCheckpoint.mock.calls[0][0]).toBe('')
+  })
+
+  it('repairs dangling tool calls in the stored transcript before reuse', async () => {
+    mocks.db.getChatSessionSteps.mockReturnValue({
+      steps: [
+        { role: 'user', content: 'q1' },
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'read_social_content', input: {} }] },
+        { role: 'user', content: 'q2' },
+      ],
+      userCount: 2,
+    })
+    // Incoming history is one turn ahead of the stored transcript (crash was
+    // between turns): q3 is the new message appended onto the repaired base.
+    const history = [
+      { role: 'user' as const, content: 'q1' },
+      { role: 'assistant' as const, content: 'a1' },
+      { role: 'user' as const, content: 'q2' },
+      { role: 'assistant' as const, content: 'a2' },
+      { role: 'user' as const, content: 'q3' },
+    ]
+    await runAgent(baseRun({ messages: history }))
+
+    // The repair was persisted back with the stored userCount preserved.
+    const repairCall = mocks.db.updateChatSessionSteps.mock.calls.find(
+      (c: any[]) => JSON.stringify(c[1]).includes('interrupted before it produced a result'),
+    )
+    expect(repairCall).toBeDefined()
+    expect(repairCall![2]).toBe(2)
+    // The model samples from the repaired transcript — the dangling call got
+    // its synthesized cancelled result.
+    const sent = mocks.streamText.mock.calls[0][0].messages
+    expect(JSON.stringify(sent)).toContain('interrupted before it produced a result')
+  })
+
+  it('does not rewrite stored steps when the transcript has nothing dangling', async () => {
+    mocks.db.getChatSessionSteps.mockReturnValue({
+      steps: [
+        { role: 'user', content: 'q1' },
+        { role: 'assistant', content: 'a1' },
+      ],
+      userCount: 1,
+    })
+    await runAgent(baseRun())
+    // No repair persist: the only updateChatSessionSteps calls are the
+    // end-of-run persist (checkpoints don't fire without prepareStep in the
+    // default mock).
+    const repairCalls = mocks.db.updateChatSessionSteps.mock.calls.filter(
+      (c: any[]) => c[2] === 1 && (c[1] as any[]).some((m) => m.role === 'user' && m.content === 'q1'),
+    )
+    expect(repairCalls.length).toBeLessThanOrEqual(1)
   })
 })
