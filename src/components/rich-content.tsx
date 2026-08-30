@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { MessageResponse } from 'src/components/ai-elements/message'
 import { TweetCard, TweetThread, TwitterReplyPreview } from 'src/components/ui/tweet-card'
 import { RedditPostCard, RedditReplyPreview } from 'src/components/ui/reddit-post-card'
+import { RenderErrorBoundary } from 'src/components/ui/render-error-boundary'
 import { cn } from 'src/lib/utils'
 
 interface Segment {
@@ -161,19 +162,39 @@ export function RichContent({ children, isAnimating, onCardAction }: { children:
           return <MessageResponse key={i} isAnimating={isAnimating && i === segments.length - 1}>{seg.content}</MessageResponse>
         }
         if (seg.type === 'tweet-card') {
-          return <TweetCard key={i} {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('tweet-card', seg.data) : undefined} />
+          return (
+            <RenderErrorBoundary key={i} label="the tweet card">
+              <TweetCard {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('tweet-card', seg.data) : undefined} />
+            </RenderErrorBoundary>
+          )
         }
         if (seg.type === 'tweet-thread') {
-          return <TweetThread key={i} tweets={seg.data?.tweets || []} />
+          return (
+            <RenderErrorBoundary key={i} label="the tweet thread">
+              <TweetThread tweets={seg.data?.tweets || []} />
+            </RenderErrorBoundary>
+          )
         }
         if (seg.type === 'reddit-post') {
-          return <RedditPostCard key={i} {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('reddit-post', seg.data) : undefined} />
+          return (
+            <RenderErrorBoundary key={i} label="the reddit post card">
+              <RedditPostCard {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('reddit-post', seg.data) : undefined} />
+            </RenderErrorBoundary>
+          )
         }
         if (seg.type === 'reply-preview' || seg.type === 'twitter-reply-preview') {
-          return <TwitterReplyPreview key={i} originalId={seg.data.originalId} original={seg.data.original} replyContent={seg.data.reply || seg.data.replyContent} replyId={seg.data.replyId} replyHandle={seg.data.replyHandle} replyName={seg.data.replyName} showPostButton={seg.data?.showPostButton} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction(seg.type, seg.data) : undefined} />
+          return (
+            <RenderErrorBoundary key={i} label="the reply preview">
+              <TwitterReplyPreview originalId={seg.data.originalId} original={seg.data.original} replyContent={seg.data.reply || seg.data.replyContent} replyId={seg.data.replyId} replyHandle={seg.data.replyHandle} replyName={seg.data.replyName} showPostButton={seg.data?.showPostButton} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction(seg.type, seg.data) : undefined} />
+            </RenderErrorBoundary>
+          )
         }
         if (seg.type === 'reddit-reply-preview') {
-          return <RedditReplyPreview key={i} originalId={seg.data.originalId} postId={seg.data.postId} commentId={seg.data.commentId} original={seg.data.original} replyContent={seg.data.reply || seg.data.replyContent} replyId={seg.data.replyId} replyName={seg.data.replyName} showPostButton={seg.data?.showPostButton} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('reddit-reply-preview', seg.data) : undefined} />
+          return (
+            <RenderErrorBoundary key={i} label="the reddit reply preview">
+              <RedditReplyPreview key={i} originalId={seg.data.originalId} postId={seg.data.postId} commentId={seg.data.commentId} original={seg.data.original} replyContent={seg.data.reply || seg.data.replyContent} replyId={seg.data.replyId} replyName={seg.data.replyName} showPostButton={seg.data?.showPostButton} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('reddit-reply-preview', seg.data) : undefined} />
+            </RenderErrorBoundary>
+          )
         }
         if (seg.type === 'image-card') {
           return <ImageCard key={i} path={seg.data?.path || ''} prompt={seg.data?.prompt} />
