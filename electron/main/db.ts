@@ -6,6 +6,7 @@ import { seedDatabase } from './seed'
 import { logger } from './log'
 import { credentialFingerprint, deleteCredential, getCredential, saveCredential } from './credentials'
 import { runMigrations } from './db-migrations'
+import { decodeStepsFromStorage, encodeStepsForStorage } from './steps-storage'
 import {
   normalizeModelId,
   parseModelRef,
@@ -293,6 +294,12 @@ function initSchema(db: Database.Database) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN pending_question TEXT')
   }
 
+  // Migration: transcript drift check (ticket #71) — fingerprint of the
+  // app-history user messages the stored transcript covers.
+  if (!cols.some((c: any) => c.name === 'steps_fingerprint')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN steps_fingerprint TEXT')
+  }
+
   // Migration: persist chat attachments for image-augmented messages
   const messageCols = db.pragma('table_info(chat_messages)') as any[]
   if (!messageCols.some((c: any) => c.name === 'attachments_json')) {
@@ -484,14 +491,12 @@ function initSchema(db: Database.Database) {
   `)
 }
 
-export function getChatSessionSteps(sessionId: number): { steps: any[]; userCount: number } | null {
-  const row = getDb().prepare('SELECT steps_json, steps_user_count FROM chat_sessions WHERE id = ?').get(sessionId) as any
+export function getChatSessionSteps(sessionId: number): { steps: any[]; userCount: number; fingerprint: string | null } | null {
+  const row = getDb().prepare('SELECT steps_json, steps_user_count, steps_fingerprint FROM chat_sessions WHERE id = ?').get(sessionId) as any
   if (!row || !row.steps_json) return null
-  try {
-    return { steps: JSON.parse(row.steps_json), userCount: row.steps_user_count || 0 }
-  } catch {
-    return null
-  }
+  const steps = decodeStepsFromStorage(row.steps_json)
+  if (!steps) return null
+  return { steps, userCount: row.steps_user_count || 0, fingerprint: row.steps_fingerprint || null }
 }
 
 export interface OnboardingRunRow {
@@ -589,9 +594,12 @@ export function clearOnboardingRun(runId: string): void {
   getDb().prepare('DELETE FROM onboarding_runs WHERE run_id = ?').run(runId)
 }
 
-export function updateChatSessionSteps(sessionId: number, steps: any[], userCount: number) {
-  getDb().prepare('UPDATE chat_sessions SET steps_json = ?, steps_user_count = ?, updated_at = datetime(\'now\') WHERE id = ?')
-    .run(JSON.stringify(steps), userCount, sessionId)
+export function updateChatSessionSteps(sessionId: number, steps: any[], userCount: number, fingerprint?: string) {
+  // Hardened storage (ticket #71): versioned envelope + capped tool results;
+  // the fingerprint records which app-history user messages this transcript
+  // covers — the reuse-path drift check.
+  getDb().prepare('UPDATE chat_sessions SET steps_json = ?, steps_user_count = ?, steps_fingerprint = COALESCE(?, steps_fingerprint), updated_at = datetime(\'now\') WHERE id = ?')
+    .run(encodeStepsForStorage(steps), userCount, fingerprint ?? null, sessionId)
 }
 
 export function getProfile() {
