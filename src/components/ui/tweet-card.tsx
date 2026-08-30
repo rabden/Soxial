@@ -938,7 +938,7 @@ export function TweetThread({ tweets, className }: TweetThreadProps) {
     <div className={cn('w-full max-w-[560px] space-y-1', className)}>
       {tweets.map((tweet, i) => (
         <div key={i} className={cn(i < tweets.length - 1 && 'border-l-2 border-border pl-4 ml-4')}>
-          <TweetCard {...tweet} />
+          <TweetCard variant="feed" {...tweet} />
         </div>
       ))}
     </div>
@@ -960,7 +960,7 @@ interface TwitterReplyPreviewProps {
 export function TwitterReplyPreview({ original, originalId, replyContent, replyId, replyHandle, replyName, onPost, showPostButton, className }: TwitterReplyPreviewProps) {
   return (
     <div className={cn('w-full max-w-[560px]', className)}>
-      {originalId ? <TweetCard tweetId={originalId} /> : <TweetCard {...original} />}
+      {originalId ? <TweetCard variant="feed" tweetId={originalId} /> : <TweetCard variant="feed" {...original} />}
       <div className="ml-6 mt-1 border-l-2 border-border pl-4">
         <div className="rounded-xl bg-muted/50 border border-border p-3.5">
           <div className="flex items-center gap-2 mb-1.5">
@@ -974,7 +974,7 @@ export function TwitterReplyPreview({ original, originalId, replyContent, replyI
               </button>
             )}
           </div>
-          {replyId ? <TweetCard tweetId={replyId} /> : <p className="text-[14px] leading-5 text-foreground whitespace-pre-wrap">{replyContent}</p>}
+          {replyId ? <TweetCard variant="feed" tweetId={replyId} /> : <p className="text-[14px] leading-5 text-foreground whitespace-pre-wrap">{replyContent}</p>}
         </div>
       </div>
     </div>
