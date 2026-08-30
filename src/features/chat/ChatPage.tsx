@@ -453,6 +453,8 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
         compacted: prev?.compacted ?? false,
       }));
     }));
+    // Titles are main-owned (ticket #67) — the sidebar refreshes when a pass writes.
+    cleanup.push(window.api.onSessionsChanged(() => { void loadSessions(); }));
     cleanup.push(window.api.onChatToolCall((data: { name: string; args: any; sessionId: number }) => {
       const sid = data.sessionId;
       setSessionStates((prev) => {
@@ -904,13 +906,6 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       { role: "user" as const, content, attachments: preparedAttachments.length > 0 ? preparedAttachments : undefined }
     ];
     const fullApiMessages = buildApiMessages(currentMsgs);
-    const textOnlyMessages = currentMsgs.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-    // Context management (threshold checks, summarization, slicing) lives in
-    // the main-process agent runtime — the renderer always sends the full
-    // history (spec #53).
     const apiMessages: ApiMessage[] = fullApiMessages;
 
     const unlistenChunk = window.api.onChatChunk((data: { text: string; sessionId: number }) => {
@@ -992,17 +987,9 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
       void window.api.addMessage(sid, "assistant", finalContent, stepsJson, undefined);
     }
 
-    const prevMsgCount = sessionStates[sid]?.messages.length || 0;
-    const userMsgCount = Math.ceil((prevMsgCount + 2) / 2);
-    if (userMsgCount === 1) {
-      window.api.generateTitle(sid, textOnlyMessages).then(async () => {
-        setSessions(await window.api.getSessions());
-      });
-    }
-
-    if (userMsgCount > 0 && userMsgCount % 50 === 0) {
-      window.api.reTitle(sid, textOnlyMessages);
-    }
+    // Titles are owned by the main process (ticket #67): the fallback landed
+    // at send-time and AI passes run during/after the turn — the renderer
+    // only refreshes the list when told.
 
     // Compaction (if the agent runtime ran one) may have updated the session
     // summary — refresh the badge source after the run settles.

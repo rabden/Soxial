@@ -278,6 +278,15 @@ function initSchema(db: Database.Database) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN context_summary TEXT')
   }
 
+  // Migration: title lifecycle (ticket #67) — kind guards write-once vs
+  // manual renames; turn is the refresh watermark ([1, 3, 6]).
+  if (!cols.some((c: any) => c.name === 'title_kind')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN title_kind TEXT')
+  }
+  if (!cols.some((c: any) => c.name === 'title_turn')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN title_turn INTEGER')
+  }
+
   // Migration: persist chat attachments for image-augmented messages
   const messageCols = db.pragma('table_info(chat_messages)') as any[]
   if (!messageCols.some((c: any) => c.name === 'attachments_json')) {
@@ -729,6 +738,27 @@ export function addChatMessage(
 
 export function updateChatSessionTitle(id: number, title: string) {
   getDb().prepare('UPDATE chat_sessions SET title = ?, updated_at = datetime(\'now\') WHERE id = ?').run(title, id)
+}
+
+/** Stored title lifecycle state (ticket #67). */
+export function getChatSessionTitleMeta(sessionId: number): { kind: 'fallback' | 'ai' | 'manual' | null; turn: number } {
+  const row = getDb().prepare('SELECT title_kind, title_turn FROM chat_sessions WHERE id = ?').get(sessionId) as any
+  return { kind: row?.title_kind ?? null, turn: row?.title_turn ?? 0 }
+}
+
+/** Automatic title write (fallback or AI): never clobbers a manual rename —
+ * the SQL guard makes the write-once promise atomic. */
+export function updateChatSessionTitleSmart(sessionId: number, title: string, kind: 'fallback' | 'ai', turn: number): boolean {
+  const result = getDb().prepare(`
+    UPDATE chat_sessions SET title = ?, title_kind = ?, title_turn = ?, updated_at = datetime('now')
+    WHERE id = ? AND title_kind IS NOT 'manual'
+  `).run(title, kind, turn, sessionId)
+  return result.changes > 0
+}
+
+/** Manual rename — wins forever (blocks all future automatic writes). */
+export function renameChatSession(id: number, title: string) {
+  getDb().prepare("UPDATE chat_sessions SET title = ?, title_kind = 'manual', updated_at = datetime('now') WHERE id = ?").run(title, id)
 }
 
 /** Step-boundary persistence (ticket #68): the assistant row exists from the

@@ -66,17 +66,16 @@ interface Window {
     finalizeAssistantMessage: (id: number, content: string, reasoning?: string) => Promise<{ success: boolean }>
     updateSessionTitle: (sessionId: number, title: string) => Promise<any>
     deleteSession: (sessionId: number) => Promise<any>
-    generateTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>
     getSessionSummary: (sessionId: number) => Promise<string | null>
     contextState: (sessionId: number, model?: string) => Promise<{
       contextTokens: number
       compactsAtTokens: number
       compacted: boolean
     }>
-    reTitle: (sessionId: number, messages: { role: string; content: string | null }[]) => Promise<any>
     generateQuickActions: () => Promise<any>
     getMedia: (filename: string) => Promise<any>
     fetchLinkPreview: (url: string) => Promise<any>
+    onSessionsChanged: (cb: () => void) => () => void
     onPuterAuthEvent: (cb: (event: import('./puter-auth-events').PuterAuthEvent) => void) => () => void
     puterAuthCancel: () => Promise<boolean>
     puterAuthOpen: () => Promise<boolean>
