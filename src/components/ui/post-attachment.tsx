@@ -389,26 +389,16 @@ export function expandTweetLinks(text: string, raw: any): string {
 function extractTweetLinks(raw: any): PostAttachment[] {
   const mediaUrls = getTweetMediaTcoUrls(raw)
   const card = getTweetCardPreview(raw)
-  // X unfurls exactly ONE og card per tweet, and it belongs to ONE specific
-  // link — its binding `card_url`, or (absent that) the last t.co in the
-  // text. Stamping the card onto every entity prefilled all links with the
-  // first link's og and stopped LinkPreview from fetching their real og.
-  const cardUrl = normalizeCardUrl(card?.url) || lastTcoInText(raw?.text)
-  const sameLink = (a?: string, b?: string) => {
-    const na = normalizeCardUrl(a)
-    const nb = normalizeCardUrl(b)
-    return Boolean(na && nb && na === nb)
-  }
+  // Intended behaviour (owner-confirmed): the tweet's og card decorates ONLY
+  // the first link — every other link renders as a plain expanded link.
+  let cardApplied = false
   const links = getTweetUrlEntities(raw)
     .filter((entity) => !mediaUrls.has(firstString(entity?.url, entity?.tco, entity?.shortUrl, entity?.short_url)))
     .map((entity): PostAttachment | null => {
       const url = getExpandedTweetUrl(entity)
       if (!url || /^https?:\/\/(t\.co|pic\.twitter\.com|x\.com|twitter\.com)\//i.test(url)) return null
-      const tco = firstString(entity?.url, entity?.tco, entity?.shortUrl, entity?.short_url)
-      // The tweet-level og card only decorates its owning link; every other
-      // link stays empty here so LinkPreview fetches ITS OWN og graph.
-      const ownsCard = Boolean(card) && (sameLink(tco, cardUrl) || sameLink(url, cardUrl))
-      const og = ownsCard ? card : undefined
+      const og = !cardApplied && card ? card : undefined
+      if (og) cardApplied = true
       return {
         type: 'link',
         url,
@@ -424,24 +414,6 @@ function extractTweetLinks(raw: any): PostAttachment[] {
   }
 
   return uniqByUrl(links)
-}
-
-/** Scheme/www/trailing-slash-insensitive key so t.co-expanded and card-url forms compare equal. */
-function normalizeCardUrl(url?: string): string {
-  if (typeof url !== 'string' || !url) return ''
-  try {
-    const u = new URL(url)
-    return `${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`.toLowerCase()
-  } catch {
-    return url.toLowerCase()
-  }
-}
-
-/** X convention: without a card_url binding, the og card belongs to the last t.co link in the text. */
-function lastTcoInText(text?: string): string {
-  if (typeof text !== 'string' || !text) return ''
-  const matches = text.match(/https:\/\/t\.co\/\w+/g)
-  return matches ? matches[matches.length - 1] : ''
 }
 
 function getTweetUrlEntities(raw: any): any[] {
