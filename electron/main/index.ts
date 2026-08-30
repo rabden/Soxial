@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
-import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, addPendingChatMessage, updateChatMessageContent, finalizeChatMessage, updateChatSessionTitle, getChatSessionTitleMeta, updateChatSessionTitleSmart, renameChatSession, getChatSessionContextSummary, getChatSessionContextTokens, getChatSessionSteps, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
+import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, addPendingChatMessage, updateChatMessageContent, finalizeChatMessage, updateChatSessionTitle, getChatSessionTitleMeta, updateChatSessionTitleSmart, renameChatSession, getChatSessionPendingQuestion, updateChatSessionPendingQuestion, getChatSessionContextSummary, getChatSessionContextTokens, getChatSessionSteps, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
 import { TITLE_SYSTEM_PROMPT, buildConversationTitlePrompt, buildFirstMessageTitlePrompt, cleanTitle, fallbackTitleFromText, shouldRegenerateTitle, type TitleMeta } from './titles'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
@@ -75,6 +75,22 @@ let mainWindow: BrowserWindow | null = null
 // first turn completes; refreshes at turns 3 and 6; then frozen. Manual
 // renames win forever (SQL-guarded write-once).
 const titleEpochs = new Map<number, number>()
+
+// Persisted ask_user questions (ticket #69): question id → session id, so the
+// answer listener can clear the persisted copy. Survives nothing — the
+// DB column is the durable copy; this map only routes answers.
+const pendingQuestionSessions = new Map<string, number>()
+
+function clearPersistedQuestionForSession(sid: number) {
+  for (const [id, mapped] of pendingQuestionSessions) {
+    if (mapped === sid) pendingQuestionSessions.delete(id)
+  }
+  try {
+    updateChatSessionPendingQuestion(sid, null)
+  } catch (e: any) {
+    logger.warn('main', `failed to clear persisted question: ${e?.message || e}`)
+  }
+}
 
 function emitSessionsChanged() {
   mainWindow?.webContents.send('chat:sessionsChanged', {})
@@ -300,6 +316,17 @@ app.whenReady().then(() => {
   getDb()
   installOnboardingAnswerListener()
   installChatAnswerListener()
+  // Persisted ask_user (ticket #69): when an answer lands, clear the
+  // session's durable copy so it doesn't render as interrupted on reload.
+  ipcMain.on('chat:answer', (_e, payload: { id?: string }) => {
+    const id = payload?.id
+    if (!id) return
+    const sid = pendingQuestionSessions.get(id)
+    if (sid != null) {
+      pendingQuestionSessions.delete(id)
+      try { updateChatSessionPendingQuestion(sid, null) } catch { /* best effort */ }
+    }
+  })
   setupIpc()
   syncMacDockIcon()
   if (process.platform !== 'darwin') setupTray()
@@ -1430,6 +1457,8 @@ function setupIpc() {
     // turn start with pending=1; checkpoints flush partial content into it;
     // the renderer finalizes it on completion (or it renders as interrupted).
     const assistantMessageId = sessionId != null ? addPendingChatMessage(sessionId) : null
+    // A new send supersedes any dead question from a previous crashed turn (ticket #69).
+    if (sessionId != null) clearPersistedQuestionForSession(sessionId)
     // Title lifecycle (ticket #67): instant fallback on the very first send,
     // then the concurrent AI pass from the first user message on the
     // session's selected model while the turn runs.
@@ -1458,8 +1487,15 @@ function setupIpc() {
       clearPendingChatQuestions()
       const chunks: string[] = []
 
-      const sendChatQuestion = (q: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }) =>
+      const sendChatQuestion = (q: { id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] }) => {
+        // Persisted ask_user (ticket #69): the question survives an app close
+        // mid-turn; cleared on answer/stop/next-send/dismiss.
+        if (sessionId != null) {
+          pendingQuestionSessions.set(q.id, sessionId)
+          try { updateChatSessionPendingQuestion(sessionId, q) } catch { /* best effort */ }
+        }
         mainWindow?.webContents.send('chat:question', { ...q, sessionId: sid })
+      }
       const currentProfile = getProfile()
       const platforms = connectedPlatformsFromProfile(currentProfile)
       // The chat run's controller is shared with delegated subagents, so
@@ -1567,6 +1603,17 @@ function setupIpc() {
     if (run) {
       run.abortController.abort()
     }
+    // Stopping kills the turn — a pending persisted question is dead too (ticket #69).
+    if (sessionId != null) clearPersistedQuestionForSession(sessionId)
+    return { success: true }
+  })
+
+  ipcMain.handle('chat:getPendingQuestion', (_e, sessionId: number) => {
+    return getChatSessionPendingQuestion(sessionId)
+  })
+
+  ipcMain.handle('chat:dismissPendingQuestion', (_e, sessionId: number) => {
+    clearPersistedQuestionForSession(sessionId)
     return { success: true }
   })
 

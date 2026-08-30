@@ -108,6 +108,9 @@ const api = {
     return () => { ipcRenderer.off('chat:sessionsChanged', listener) }
   },
 
+  getPendingQuestion: (sessionId: number) => ipcRenderer.invoke('chat:getPendingQuestion', sessionId),
+  dismissPendingQuestion: (sessionId: number) => ipcRenderer.invoke('chat:dismissPendingQuestion', sessionId),
+
   getSessionSummary: (sessionId: number) => ipcRenderer.invoke('chat:getSessionSummary', sessionId),
   contextState: (sessionId: number, model?: string) => ipcRenderer.invoke('chat:contextState', sessionId, model),
   generateQuickActions: () => ipcRenderer.invoke('chat:generateQuickActions'),

@@ -76,6 +76,8 @@ interface Window {
     getMedia: (filename: string) => Promise<any>
     fetchLinkPreview: (url: string) => Promise<any>
     onSessionsChanged: (cb: () => void) => () => void
+    getPendingQuestion: (sessionId: number) => Promise<{ id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] } | null>
+    dismissPendingQuestion: (sessionId: number) => Promise<{ success: boolean }>
     onPuterAuthEvent: (cb: (event: import('./puter-auth-events').PuterAuthEvent) => void) => () => void
     puterAuthCancel: () => Promise<boolean>
     puterAuthOpen: () => Promise<boolean>

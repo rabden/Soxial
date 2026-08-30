@@ -127,6 +127,9 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
   const [scrollbarW, setScrollbarW] = useState(6);
   const contextSummaryRef = useRef<string | null>(null);
   const [contextState, setContextState] = useState<{ usedTokens: number; compactsAtTokens: number; compacted: boolean } | null>(null);
+  // Persisted ask_user from a turn that died mid-question (ticket #69) —
+  // read-only: the turn it belonged to is gone, so it cannot be answered.
+  const [interruptedQuestion, setInterruptedQuestion] = useState<{ id: string; text: string; type: 'single' | 'multi' | 'text'; options?: string[] } | null>(null);
   const [quickActions, setQuickActions] = useState<string[]>([]);
   const fetchedQuickActions = useRef(false);
   const quickActionsRequestRef = useRef(0);
@@ -394,6 +397,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     });
 
     contextSummaryRef.current = await window.api.getSessionSummary(id);
+    setInterruptedQuestion(await window.api.getPendingQuestion(id));
     void refreshContextState(id);
   }
 
@@ -877,6 +881,9 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
 
     const sid = sessionId;
 
+    // A new send supersedes any interrupted question (main clears the column too — ticket #69).
+    setInterruptedQuestion(null);
+
     setSessionStates((prev) => ({
       ...prev,
       [sid]: {
@@ -1271,6 +1278,40 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
               }}
             >
               <div ref={setInputEl} className="max-w-3xl mx-auto flex justify-center">
+                {interruptedQuestion && !streaming && (
+                  <div
+                    data-testid="interrupted-question"
+                    className="absolute bottom-full left-0 right-0 mb-2 rounded-xl border border-amber-400/20 bg-card/95 p-4 text-sm shadow-lg"
+                  >
+                    <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-amber-400/80 mb-2">
+                      <span className="size-1.5 rounded-full bg-amber-400/80" />
+                      Question lost to an interrupted turn
+                    </div>
+                    <p className="text-foreground/85 mb-2">{interruptedQuestion.text}</p>
+                    {interruptedQuestion.options && interruptedQuestion.options.length > 0 && (
+                      <p className="text-xs text-muted-foreground/60 mb-3">
+                        Options were: {interruptedQuestion.options.join(' · ')}
+                      </p>
+                    )}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground/60">
+                        The turn it belonged to is gone — ask again to continue.
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="dismiss-interrupted-question"
+                        onClick={async () => {
+                          const sid = currentSessionId;
+                          setInterruptedQuestion(null);
+                          if (sid !== null) await window.api.dismissPendingQuestion(sid);
+                        }}
+                        className="text-xs font-medium rounded-full px-3 py-1.5 bg-accent/60 hover:bg-accent text-foreground/80 transition-all"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <PromptInput
                   placeholder={
                     onMainScreen
