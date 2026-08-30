@@ -93,6 +93,14 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
   const [mode, setModeState] = useState<Mode>("agent");
   const modeRef = useRef<Mode>("agent");
   const [humanTab, setHumanTab] = useState<HumanTab>("feed");
+  // Human workspace mounts lazily: only after human mode is actually visited
+  // (persisted app_mode at open, or an explicit toggle). Mounting it eagerly
+  // in agent mode fired the feed's page-1 fetch on every app open.
+  const [humanVisited, setHumanVisited] = useState(false);
+
+  useEffect(() => {
+    if (mode === "human") setHumanVisited(true);
+  }, [mode]);
 
   useEffect(() => {
     modeRef.current = mode;
@@ -394,9 +402,13 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
     }
     try {
       const state = await window.api.contextState(sid, selectedModel);
-      setContextState(state.contextTokens != null
-        ? { usedTokens: state.contextTokens, compactsAtTokens: state.compactsAtTokens, compacted: state.compacted }
-        : null);
+      // Main always returns a number (snapshot, else estimate of the stored
+      // transcript) — the ring is visible from session open, at 0% for new ones.
+      setContextState({
+        usedTokens: state.contextTokens,
+        compactsAtTokens: state.compactsAtTokens,
+        compacted: state.compacted,
+      });
     } catch {
       setContextState(null);
     }
@@ -1103,8 +1115,9 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
           />
         ) : (
           <>
-            {/* Human Workspace (Kept mounted) */}
+            {/* Human Workspace (Kept mounted after first visit) */}
             <div className={cn("flex-1 flex-col min-w-0 h-full overflow-hidden", mode === "human" ? "flex" : "hidden")}>
+              {humanVisited && (
               <Suspense fallback={<div className="flex-1 flex items-center justify-center text-sm text-zinc-500">Loading Human View...</div>}>
                 <div data-mode="human" className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-black">
                   <HumanPage
@@ -1114,6 +1127,7 @@ export default function Chat({ initialSessionId }: { initialSessionId?: number |
                   />
                 </div>
               </Suspense>
+              )}
             </div>
 
             {/* Agent Chat Workspace (Kept mounted) */}

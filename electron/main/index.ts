@@ -3,11 +3,11 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
-import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, getChatSessionContextTokens, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
+import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, updateChatSessionTitle, getChatSessionContextSummary, getChatSessionContextTokens, getChatSessionSteps, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
 import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
-import { compactionThresholdTokens } from './context-budget'
+import { compactionThresholdTokens, estimateContextTokens } from './context-budget'
 import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
 import { logger } from './log'
 import { initPuterAuthHost } from './puter-auth'
@@ -1550,11 +1550,14 @@ function setupIpc() {
     return getChatSessionContextSummary(sessionId)
   })
 
-  // Live context state for the renderer's gauge (ticket #59). The token
-  // snapshot is persisted by the agent runtime after each run; the compaction
-  // line is the flat 180k policy constant.
-  ipcMain.handle('chat:contextState', (_e, sessionId: number, model?: string) => {
-    const contextTokens = getChatSessionContextTokens(sessionId)
+  // Live context state for the renderer's ring (ticket #59). The snapshot is
+  // persisted by the agent runtime after each run; before one exists the
+  // chars/4 estimate of the stored transcript stands in — the ring is always
+  // visible for an open session instead of appearing mid-first-turn.
+  ipcMain.handle('chat:contextState', (_e, sessionId: number, _model?: string) => {
+    const snapshot = getChatSessionContextTokens(sessionId)
+    const stored = getChatSessionSteps(sessionId)
+    const contextTokens = snapshot ?? estimateContextTokens('', stored?.steps ?? [])
     return {
       contextTokens,
       compactsAtTokens: compactionThresholdTokens(),
