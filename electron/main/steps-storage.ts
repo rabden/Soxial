@@ -21,23 +21,61 @@ export function encodeStepsForStorage(steps: any[]): string {
 }
 
 /** Decode stored steps: the envelope, or legacy raw arrays from before the
- * envelope existed. */
+ * envelope existed. Also repairs any already-persisted truncated stubs that
+ * lack a `type` discriminator (the 40k cap shipped with an invalid shape and
+ * broke session 4 — this heals them on load). */
 export function decodeStepsFromStorage(raw: string | null | undefined): any[] | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed)) return parsed // legacy shape
-    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.steps)) return parsed.steps
-    return null
+    const steps: any[] | null = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' && Array.isArray(parsed.steps) ? parsed.steps : null
+    if (!steps) return null
+    return repairInvalidTruncatedOutputs(steps)
   } catch {
     return null
   }
 }
 
+function isValidToolResultOutput(output: any): boolean {
+  if (!output || typeof output !== 'object') return false
+  const t = output.type
+  return t === 'text' || t === 'json' || t === 'error-text' || t === 'error-json' || t === 'image' || t === 'file'
+}
+
+function repairInvalidTruncatedOutputs(steps: any[]): any[] {
+  let mutated = false
+  const repaired = steps.map((msg) => {
+    if (msg?.role !== 'tool' || !Array.isArray(msg.content)) return msg
+    let contentChanged = false
+    const content = msg.content.map((part: any) => {
+      if (part?.type !== 'tool-result' || isValidToolResultOutput(part.output)) return part
+      // Legacy invalid stub from the first truncation ship (storedTruncated without type)
+      const maybeLegacy = part.output as any
+      if (maybeLegacy && typeof maybeLegacy === 'object' && maybeLegacy.storedTruncated) {
+        contentChanged = true
+        return {
+          ...part,
+          output: {
+            type: 'text' as const,
+            value: `[Tool result truncated — ${maybeLegacy.originalChars ?? '?'} chars. Preview:\n${String(maybeLegacy.preview ?? '').slice(0, 2000)}]`,
+          },
+        }
+      }
+      // Any other schema-invalid output — wrap as text so the Zod union passes
+      contentChanged = true
+      return { ...part, output: { type: 'text' as const, value: safeJson(part.output).slice(0, 2000) } }
+    })
+    if (!contentChanged) return msg
+    mutated = true
+    return { ...msg, content }
+  })
+  return mutated ? repaired : steps
+}
+
 /** Cap oversized tool-result outputs. Returns a new array — the caller's
  * in-memory transcript (full fidelity) is never mutated. Oversize outputs
- * become an explicit stub: providers never see broken media, models see a
- * truncation note instead of silent data loss. */
+ * become an explicit text stub with a valid `type` discriminator so the
+ * persisted transcript still passes `modelMessageSchema` on reuse. */
 export function truncateStoredToolResults(steps: any[]): any[] {
   return steps.map((msg) => {
     if (msg?.role !== 'tool' || !Array.isArray(msg.content)) return msg
@@ -50,9 +88,8 @@ export function truncateStoredToolResults(steps: any[]): any[] {
       return {
         ...part,
         output: {
-          storedTruncated: true,
-          originalChars: serialized.length,
-          preview: serialized.slice(0, 2_000),
+          type: 'text' as const,
+          value: `[Tool result truncated — ${serialized.length} chars (cap ${STORED_TOOL_RESULT_MAX_CHARS}). Preview:\n${serialized.slice(0, 2000)}]`,
         },
       }
     })
