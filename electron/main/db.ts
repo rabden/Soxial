@@ -483,6 +483,13 @@ function initSchema(db: Database.Database) {
     db.exec('ALTER TABLE user_profile ADD COLUMN selected_model TEXT')
   }
 
+  // Migration: trivial tasks model (titles + quick actions) — user-selectable
+  // with per-provider defaults (google → 3.5-flash-lite, zhipu → 4.7-flash
+  // or 5.3-flash for coding plan, openai → gpt-5.6-luna, anthropic → sonnet5).
+  if (!profileCols.some((c: any) => c.name === 'trivial_model')) {
+    db.exec('ALTER TABLE user_profile ADD COLUMN trivial_model TEXT')
+  }
+
   // Migration: sync primary API keys from user_profile to api_keys table
   // so they participate in uniform rotation, tier detection, and exhaustion tracking.
   // Uses syncPrimaryKeyToApiKeys which updates the existing 'Primary' row in-place

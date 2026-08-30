@@ -1,8 +1,8 @@
 import { streamText, generateText as aiGenerateText, isStepCount } from 'ai'
 import { isUnusableCompletion } from './agent-completion'
-import { getProfile, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb, getCustomProviderCredential, getChatSessionContextSummary, getChatSessionContextTokens, updateChatSessionContextTokens, updateChatSessionContextSummary } from './db'
+import { getProfile, getAvailableApiKeyForModel, markModelExhausted, isModelExhaustedForAllKeys, updateApiKeyLastUsed, getChatSessionSteps, updateChatSessionSteps, getDb, getCustomProviderCredential, getChatSessionContextSummary, getChatSessionContextTokens, updateChatSessionContextTokens, updateChatSessionContextSummary, getActiveKeyCountForProvider, listActiveCustomProviders } from './db'
 import { userMessagesFingerprint } from './steps-storage'
-import { normalizeModelId, parseModelRef, getModelWindow } from './models'
+import { normalizeModelId, parseModelRef, getModelWindow, customModelId, type ProviderKind } from './models'
 import { compactSessionHistory, isCompactionCarrier } from './compaction'
 import { isContextLengthError } from './context-errors'
 import { compactionThresholdTokens, estimateContextTokens } from './context-budget'
@@ -29,20 +29,82 @@ export { ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt } from './onboardin
 
 const CHAT_MODEL = 'gemini-3.5-flash-lite'
 
-// ─── Utility model selection ────────────────────────────────────────────────
-// Titles and quick actions use the first model of the dynamic chain — no
-// per-provider special-casing. Any configured provider is equally eligible.
-export function getUtilityModel(): string {
-  return buildChatFallbackChain()[0]
+// ─── Trivial tasks model selection (titles + quick actions) ───────────────
+// User can pick any enabled model in Settings → AI providers; empty = Auto.
+// Auto maps to per-provider defaults: google → 3.5-flash-lite, zhipu →
+// 4.7-flash (or 5.3-flash when Coding Plan is on), openai → gpt-5.6-luna,
+// anthropic → sonnet5 — in provider priority order.
+
+function trivialDefaultFor(kind: ProviderKind, codingPlan: boolean): string | null {
+  switch (kind) {
+    case 'google': return 'gemini-3.5-flash-lite'
+    case 'zhipu': return codingPlan ? 'glm-5.3-flash' : 'glm-4.7-flash'
+    case 'openai': return 'openai/gpt-5.6-luna'
+    case 'anthropic': return 'anthropic/claude-sonnet-5'
+    default: return null
+  }
 }
 
-export function getTitleModel(): string {
-  return getUtilityModel()
+function hasTrivialKeys(kind: ProviderKind): boolean {
+  if (kind === 'custom') return listActiveCustomProviders().length > 0
+  return getActiveKeyCountForProvider(kind as any) > 0
 }
 
-export function getQuickActionModel(): string {
-  return getUtilityModel()
+/** All trivial defaults for currently-enabled providers, in priority order. */
+function trivialDefaultsChain(): string[] {
+  const codingPlan = getProfile()?.zai_coding_plan === 1
+  const order: ProviderKind[] = ['google', 'zhipu', 'openai', 'anthropic']
+  const chain: string[] = []
+  for (const kind of order) {
+    if (!hasTrivialKeys(kind)) continue
+    const d = trivialDefaultFor(kind, codingPlan)
+    if (d) chain.push(d)
+  }
+  // Include first custom model as last resort if nothing else
+  if (chain.length === 0) {
+    const customs = listActiveCustomProviders()
+    if (customs.length > 0 && customs[0].models.length > 0) {
+      chain.push(customModelId(customs[0].id, customs[0].models[0].id))
+    }
+  }
+  if (chain.length === 0) chain.push('gemini-3.5-flash-lite')
+  return chain
 }
+
+export function getTrivialModel(): string {
+  const profile: any = getProfile()
+  const picked = typeof profile?.trivial_model === 'string' ? profile.trivial_model.trim() : ''
+  if (picked) {
+    try {
+      const ref = parseModelRef(picked)
+      if (hasTrivialKeys(ref.kind)) return normalizeModelId(picked)
+    } catch { /* fall through to auto */ }
+  }
+  return trivialDefaultsChain()[0]
+}
+
+/** Ordered fallback candidates for trivial tasks: selected first, then other provider defaults. */
+export function getTrivialModelCandidates(): string[] {
+  const primary = getTrivialModel()
+  const chain = trivialDefaultsChain()
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const m of [primary, ...chain]) {
+    const norm = normalizeModelId(m)
+    if (!seen.has(norm)) { seen.add(norm); result.push(norm) }
+  }
+  // Append full chat fallback chain as last resort (covers custom models beyond first)
+  for (const m of buildChatFallbackChain()) {
+    const norm = normalizeModelId(m)
+    if (!seen.has(norm)) { seen.add(norm); result.push(norm) }
+  }
+  return result
+}
+
+// Backward compat — old callers
+export function getUtilityModel(): string { return getTrivialModel() }
+export function getTitleModel(): string { return getTrivialModel() }
+export function getQuickActionModel(): string { return getTrivialModel() }
 
 const MODEL_LABELS: Record<string, string> = {
   // Current ids first; pre-rename labels/ids at the bottom still resolve after model bumps.

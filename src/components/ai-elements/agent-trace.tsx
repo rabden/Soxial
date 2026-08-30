@@ -536,7 +536,7 @@ export function AgentTrace({
           setManualExpanded((prev) => !(prev !== null ? prev : active || defaultExpanded))
         }
         className={cn(
-          "group flex w-fit items-center gap-1.5 p-0 bg-transparent text-left transition-colors duration-150 cursor-pointer",
+          "group/tracehead flex w-fit items-center gap-1.5 p-0 bg-transparent text-left transition-colors duration-150 cursor-pointer",
           "text-muted-foreground/75 hover:text-foreground font-normal text-[13.5px] leading-relaxed",
           "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none rounded-xs"
         )}
@@ -574,7 +574,7 @@ export function AgentTrace({
         <ChevronDown
           aria-hidden="true"
           className={cn(
-            "size-3 opacity-30 transition-transform duration-300 group-hover:opacity-80",
+            "size-3 opacity-30 transition-transform duration-300 group-hover/tracehead:opacity-80",
             expanded ? "rotate-180" : "rotate-0"
           )}
         />

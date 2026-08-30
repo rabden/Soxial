@@ -119,6 +119,8 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
   })
   const [extraKeys, setExtraKeys] = useState<Record<HostedProviderId, ExtraKey[]>>({ google: [], zhipu: [], openai: [], anthropic: [] })
   const [codingPlan, setCodingPlan] = useState(profile?.zai_coding_plan === 1)
+  const [trivialModel, setTrivialModel] = useState(profile?.trivial_model || '')
+  const [modelCatalog, setModelCatalog] = useState<Array<{ id: string; label: string }>>([])
   const [customProviders, setCustomProviders] = useState<Array<{ id: number; name: string; baseUrl: string; models: Array<{ id: string; label: string }>; hasKey: boolean; keyMasked: string | null }>>([])
   const [customDraft, setCustomDraft] = useState<{ id?: number; name: string; baseUrl: string; apiKey: string; models: string[]; modelInput: string } | null>(null)
   const [customBusy, setCustomBusy] = useState<'test' | 'save' | 'remove' | null>(null)
@@ -150,7 +152,13 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
       })
     }
     void refreshCustomProviders()
+    window.api.getModelCatalog().then(setModelCatalog).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    setTrivialModel(profile?.trivial_model || '')
+    setCodingPlan(profile?.zai_coding_plan === 1)
+  }, [profile?.trivial_model, profile?.zai_coding_plan])
 
   const refreshCustomProviders = async () => {
     try {
@@ -237,6 +245,7 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
         openai_api_key: primaryKeys.openai.trim(),
         anthropic_api_key: primaryKeys.anthropic.trim(),
         zai_coding_plan: codingPlan ? 1 : 0,
+        trivial_model: trivialModel.trim() || null,
       })
 
       // Persist backup keys per provider: add new rows, drop removed ones.
@@ -820,6 +829,33 @@ export default function Profile({ profile, section, onBack, onSaved, onTwitterHa
                 {renderHostedPanel(activeTab)}
               </motion.div>
             </AnimatePresence>
+
+            {/* Trivial tasks model — titles + quick actions */}
+            <div className="p-5 rounded-2xl bg-white/[0.02] border border-white/[0.06] space-y-4">
+              <div>
+                <div className="text-xs font-semibold text-white tracking-tight">Trivial tasks model</div>
+                <div className="text-[11px] text-zinc-500 mt-1 leading-4">
+                  Model for titles and quick actions. Auto uses per-provider defaults (Google → Gemini 3.5 Flash Lite, Z.AI → GLM 4.7 Flash / GLM 5.3 Flash for Coding Plan, OpenAI → GPT-5.6 Luna, Anthropic → Claude Sonnet 5) and automatically falls back to other enabled providers if the first fails.
+                </div>
+              </div>
+              <div className="relative">
+                <select
+                  value={trivialModel}
+                  onChange={(e) => setTrivialModel(e.target.value)}
+                  disabled={rebuilding || saving}
+                  className="w-full h-11 rounded-xl border border-input/60 bg-card px-4 pr-10 text-sm text-foreground outline-none appearance-none hover:border-input focus:border-input disabled:opacity-50"
+                >
+                  <option value="">Auto (per-provider default)</option>
+                  {modelCatalog.map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500">▾</div>
+              </div>
+              {trivialModel && !modelCatalog.some(m => m.id === trivialModel) && (
+                <div className="text-[11px] text-amber-300/80">Selected model is not from an enabled provider — will fall back to Auto.</div>
+              )}
+            </div>
 
             {/* Save Button */}
           <div className="flex justify-end pt-1">

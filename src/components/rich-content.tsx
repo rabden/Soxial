@@ -6,7 +6,7 @@ import { RenderErrorBoundary } from 'src/components/ui/render-error-boundary'
 import { cn } from 'src/lib/utils'
 
 interface Segment {
-  type: 'text' | 'tweet-card' | 'tweet-thread' | 'reddit-post' | 'twitter-reply-preview' | 'reddit-reply-preview' | 'reply-preview' | 'image-card'
+  type: 'text' | 'tweet-card' | 'tweet-thread' | 'reddit-post' | 'twitter-reply-preview' | 'tweet-reply-preview' | 'reddit-reply-preview' | 'reply-preview' | 'image-card'
   content: string
   data?: any
 }
@@ -35,7 +35,7 @@ function forceIdOnly(data: any, type: string): any {
       return { id: data.id, commentId: data.commentId, showPostButton: data.showPostButton }
     }
   }
-  if (type === 'reply-preview' || type === 'twitter-reply-preview') {
+  if (type === 'reply-preview' || type === 'twitter-reply-preview' || type === 'tweet-reply-preview') {
     if (data.originalId) {
       return { ...data, original: undefined }
     }
@@ -77,14 +77,23 @@ function extractValidJSON(str: string): { data: any, remainder: string } {
 }
 
 function parseSegments(text: string, isAnimating?: boolean): Segment[] {
+  // Lenient pre-pass: the reply-crafter sometimes emits `tweet-reply-preview {…}`
+  // without the `:::` fence (see [Image 1] — raw lines fell through as text).
+  // Normalize bare leading `type {` at line starts to `:::type {` so the
+  // fence-based parser below can handle both forms and the card from [Image 2]
+  // (post + vertical line + reply) renders again.
+  const normalized = text.replace(
+    /^\s*(tweet-card|tweet-thread|reddit-post|twitter-reply-preview|tweet-reply-preview|reddit-reply-preview|reply-preview|image-card)\s*\{/gm,
+    ':::$1 {'
+  )
   const segments: Segment[] = []
-  const regex = /:::(tweet-card|tweet-thread|reddit-post|twitter-reply-preview|reddit-reply-preview|reply-preview|image-card)\s+([\s\S]*?)(?:\s*:::(?!\S)|(?=\s*:::|$))/g
+  const regex = /:::(tweet-card|tweet-thread|reddit-post|twitter-reply-preview|tweet-reply-preview|reddit-reply-preview|reply-preview|image-card)\s+([\s\S]*?)(?:\s*:::(?!\S)|(?=\s*:::|$))/g
   let lastIndex = 0
   let match
 
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = regex.exec(normalized)) !== null) {
     if (match.index > lastIndex) {
-      const rawSkipped = text.slice(lastIndex, match.index)
+      const rawSkipped = normalized.slice(lastIndex, match.index)
       const content = rawSkipped.replace(/:::/g, '').trim()
       if (content && !(isAnimating && isPartialCard(content))) {
         segments.push({ type: 'text', content })
@@ -109,8 +118,8 @@ function parseSegments(text: string, isAnimating?: boolean): Segment[] {
     lastIndex = regex.lastIndex
   }
 
-  if (lastIndex < text.length) {
-    const rawRemaining = text.slice(lastIndex)
+  if (lastIndex < normalized.length) {
+    const rawRemaining = normalized.slice(lastIndex)
     const remaining = rawRemaining.replace(/:::/g, '').trim()
     if (remaining && !(isAnimating && isPartialCard(remaining))) {
       segments.push({ type: 'text', content: remaining })
@@ -164,14 +173,18 @@ export function RichContent({ children, isAnimating, onCardAction }: { children:
         if (seg.type === 'tweet-card') {
           return (
             <RenderErrorBoundary key={i} label="the tweet card">
-              <TweetCard variant="feed" {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('tweet-card', seg.data) : undefined} />
+              <div className="w-full overflow-hidden rounded-xl border border-white/[0.06] bg-black [&>div]:!border-b-0">
+                <TweetCard variant="feed" {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('tweet-card', seg.data) : undefined} />
+              </div>
             </RenderErrorBoundary>
           )
         }
         if (seg.type === 'tweet-thread') {
           return (
             <RenderErrorBoundary key={i} label="the tweet thread">
-              <TweetThread tweets={seg.data?.tweets || []} />
+              <div className="w-full overflow-hidden rounded-xl border border-white/[0.06] bg-black [&>div]:!border-b-0">
+                <TweetThread tweets={seg.data?.tweets || []} />
+              </div>
             </RenderErrorBoundary>
           )
         }
@@ -182,7 +195,7 @@ export function RichContent({ children, isAnimating, onCardAction }: { children:
             </RenderErrorBoundary>
           )
         }
-        if (seg.type === 'reply-preview' || seg.type === 'twitter-reply-preview') {
+        if (seg.type === 'reply-preview' || seg.type === 'twitter-reply-preview' || seg.type === 'tweet-reply-preview') {
           return (
             <RenderErrorBoundary key={i} label="the reply preview">
               <TwitterReplyPreview originalId={seg.data.originalId} original={seg.data.original} replyContent={seg.data.reply || seg.data.replyContent} replyId={seg.data.replyId} replyHandle={seg.data.replyHandle} replyName={seg.data.replyName} showPostButton={seg.data?.showPostButton} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction(seg.type, seg.data) : undefined} />
