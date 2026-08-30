@@ -164,7 +164,7 @@ export function RichContent({ children, isAnimating, onCardAction }: { children:
         if (seg.type === 'tweet-card') {
           return (
             <RenderErrorBoundary key={i} label="the tweet card">
-              <TweetCard {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('tweet-card', seg.data) : undefined} />
+              <TweetCard variant="feed" {...seg.data} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction('tweet-card', seg.data) : undefined} />
             </RenderErrorBoundary>
           )
         }
