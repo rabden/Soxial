@@ -442,6 +442,52 @@ export function TweetCard({
     }).catch(() => {})
   }, [replyId])
 
+  const displayData = loadedData || {
+    authorName, authorHandle, authorImage, content, likes, retweets,
+    replies, bookmarks, views, quotes, isRetweet, retweetedBy, quotedTweet,
+    onLike, onRetweet, onBookmark, onShare,
+    timestamp, verified, replyTo, onPost, posting, repliesList, attachments, showPostButton, variant,
+    isLiked, isRetweeted, isBookmarked, isPinned,
+  }
+
+  const resolvedReplies = loadedReply
+    ? [loadedReply, ...(displayData.repliesList || [])]
+    : displayData.repliesList
+
+  const tweetIdForLink = activeId || displayData.id
+  const tweetUrl = displayData.authorHandle && tweetIdForLink
+    ? `https://x.com/${displayData.authorHandle}/status/${tweetIdForLink}`
+    : displayData.authorHandle
+      ? `https://x.com/${displayData.authorHandle}`
+      : 'https://x.com'
+
+  // NOTE: no early returns above this line — every hook in this component
+  // must run on every render. The loading/error returns below used to sit
+  // before the optimistic-state hooks, so a preview card that flipped to
+  // `loading` mid-life rendered fewer hooks and blanked the whole app
+  // ("Rendered fewer hooks than expected").
+  const isFeed = (variant || displayData.variant) === 'feed'
+
+  // Optimistic state for Human actions — local UI updates instantly, reverts on IPC failure
+  const [liked, setLiked] = useState(displayData.isLiked ?? false)
+  const [likeCount, setLikeCount] = useState(displayData.likes ?? 0)
+  const [retweeted, setRetweeted] = useState(displayData.isRetweeted ?? false)
+  const [retweetCount, setRetweetCount] = useState(displayData.retweets ?? 0)
+  const [bookmarked, setBookmarked] = useState(displayData.isBookmarked ?? false)
+  const [showCopied, setShowCopied] = useState(false)
+  // Human reply modal (comment button)
+  const [replyOpen, setReplyOpen] = useState(false)
+  const [extraReplies, setExtraReplies] = useState(0)
+
+  useEffect(() => {
+    setLiked(displayData.isLiked ?? false)
+    setLikeCount(displayData.likes ?? 0)
+    setRetweeted(displayData.isRetweeted ?? false)
+    setRetweetCount(displayData.retweets ?? 0)
+    setBookmarked(displayData.isBookmarked ?? false)
+  }, [displayData.id, displayData.isLiked, displayData.likes, displayData.isRetweeted, displayData.retweets, displayData.isBookmarked])
+
+  // Early returns live BELOW every hook — see the note above displayData.
   if (loading) {
     return (
       <div className={cn('w-full max-w-[560px] rounded-xl p-6 bg-card border border-border flex flex-col items-center justify-center min-h-[140px] gap-2.5', className)}>
@@ -463,46 +509,6 @@ export function TweetCard({
       </div>
     )
   }
-
-  const displayData = loadedData || {
-    authorName, authorHandle, authorImage, content, likes, retweets,
-    replies, bookmarks, views, quotes, isRetweet, retweetedBy, quotedTweet,
-    onLike, onRetweet, onBookmark, onShare,
-    timestamp, verified, replyTo, onPost, posting, repliesList, attachments, showPostButton, variant,
-    isLiked, isRetweeted, isBookmarked, isPinned,
-  }
-
-  const resolvedReplies = loadedReply
-    ? [loadedReply, ...(displayData.repliesList || [])]
-    : displayData.repliesList
-
-  const tweetIdForLink = activeId || displayData.id
-  const tweetUrl = displayData.authorHandle && tweetIdForLink
-    ? `https://x.com/${displayData.authorHandle}/status/${tweetIdForLink}`
-    : displayData.authorHandle
-      ? `https://x.com/${displayData.authorHandle}`
-      : 'https://x.com'
-
-  const isFeed = (variant || displayData.variant) === 'feed'
-
-  // Optimistic state for Human actions — local UI updates instantly, reverts on IPC failure
-  const [liked, setLiked] = useState(displayData.isLiked ?? false)
-  const [likeCount, setLikeCount] = useState(displayData.likes ?? 0)
-  const [retweeted, setRetweeted] = useState(displayData.isRetweeted ?? false)
-  const [retweetCount, setRetweetCount] = useState(displayData.retweets ?? 0)
-  const [bookmarked, setBookmarked] = useState(displayData.isBookmarked ?? false)
-  const [showCopied, setShowCopied] = useState(false)
-  // Human reply modal (comment button)
-  const [replyOpen, setReplyOpen] = useState(false)
-  const [extraReplies, setExtraReplies] = useState(0)
-
-  useEffect(() => {
-    setLiked(displayData.isLiked ?? false)
-    setLikeCount(displayData.likes ?? 0)
-    setRetweeted(displayData.isRetweeted ?? false)
-    setRetweetCount(displayData.retweets ?? 0)
-    setBookmarked(displayData.isBookmarked ?? false)
-  }, [displayData.id, displayData.isLiked, displayData.likes, displayData.isRetweeted, displayData.retweets, displayData.isBookmarked])
 
   const handleLike = async (e: React.MouseEvent) => {
     e.stopPropagation()

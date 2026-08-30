@@ -3,6 +3,7 @@ import { MessageSquare } from "lucide-react";
 import { AgentTrace } from "src/components/ai-elements/agent-trace";
 import { ChainOfThoughtStep } from "src/components/ai-elements/chain-of-thought";
 import { RichContent } from "src/components/rich-content";
+import { RenderErrorBoundary } from "src/components/ui/render-error-boundary";
 import { groupStepsIntoSegments } from "src/features/chat/trace-groups";
 import type { StepItem } from "src/features/chat/types";
 
@@ -28,7 +29,18 @@ export function MessageSegments({
     decorateTool: renderToolBody
       ? (node, step) => {
           const body = renderToolBody(step);
-          return body ? { ...node, renderContent: () => body } : node;
+          // Contain render faults per card (tweet previews, media, …) — a
+          // bad card degrades to a fallback instead of blanking the app.
+          const label =
+            (step as { name?: string })?.name ? `the ${step.name} card` : "this card";
+          return body
+            ? {
+                ...node,
+                renderContent: () => (
+                  <RenderErrorBoundary label={label}>{body}</RenderErrorBoundary>
+                ),
+              }
+            : node;
         }
       : undefined,
   });
