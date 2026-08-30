@@ -6,6 +6,8 @@ export interface ChatMessage {
   steps?: StepItem[]
   isToolAnswer?: boolean
   attachments?: ChatAttachment[]
+  /** Turn never finalized (crash/close mid-turn) — step-boundary persistence (ticket #68). */
+  interrupted?: boolean
 }
 
 export type StepItem =

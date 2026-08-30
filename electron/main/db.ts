@@ -284,6 +284,13 @@ function initSchema(db: Database.Database) {
     db.exec('ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT')
   }
 
+  // Migration: pending marks an assistant row created at turn start whose
+  // turn never finalized (crash/close mid-turn) — step-boundary persistence
+  // (spec #65, ticket #68).
+  if (!messageCols.some((c: any) => c.name === 'pending')) {
+    db.exec('ALTER TABLE chat_messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0')
+  }
+
   // Migration: add puter_token if missing
   const profileCols = db.pragma('table_info(user_profile)') as any[]
   if (!profileCols.some((c: any) => c.name === 'puter_token')) {
@@ -722,6 +729,30 @@ export function addChatMessage(
 
 export function updateChatSessionTitle(id: number, title: string) {
   getDb().prepare('UPDATE chat_sessions SET title = ?, updated_at = datetime(\'now\') WHERE id = ?').run(title, id)
+}
+
+/** Step-boundary persistence (ticket #68): the assistant row exists from the
+ * moment the turn starts, so a crash costs at most the step in flight. */
+export function addPendingChatMessage(sessionId: number): number {
+  const db = getDb()
+  const result = db.prepare(`
+    INSERT INTO chat_messages (session_id, role, content, pending)
+    VALUES (?, 'assistant', '', 1)
+  `).run(sessionId)
+  db.prepare('UPDATE chat_sessions SET updated_at = datetime(\'now\') WHERE id = ?').run(sessionId)
+  return result.lastInsertRowid as number
+}
+
+/** Partial content flush at each step boundary (ticket #68). */
+export function updateChatMessageContent(id: number, content: string) {
+  getDb().prepare('UPDATE chat_messages SET content = ? WHERE id = ?').run(content, id)
+}
+
+/** Turn completion: finalize the pending assistant row instead of inserting a
+ * second one. `reasoning` carries the renderer's UI steps envelope (v2). */
+export function finalizeChatMessage(id: number, content: string, reasoning?: string) {
+  getDb().prepare('UPDATE chat_messages SET content = ?, reasoning = COALESCE(?, reasoning), pending = 0 WHERE id = ?')
+    .run(content, reasoning ?? null, id)
 }
 
 export function getChatSessionContextSummary(sessionId: number): string | null {
