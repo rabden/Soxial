@@ -3,10 +3,11 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { config } from 'dotenv'
 config()
-import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, addPendingChatMessage, updateChatMessageContent, finalizeChatMessage, updateChatSessionTitle, getChatSessionContextSummary, getChatSessionContextTokens, getChatSessionSteps, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
+import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, getChatMessages, addChatMessage, addPendingChatMessage, updateChatMessageContent, finalizeChatMessage, updateChatSessionTitle, getChatSessionTitleMeta, updateChatSessionTitleSmart, renameChatSession, getChatSessionContextSummary, getChatSessionContextTokens, getChatSessionSteps, deleteChatSession, getQuickActions, setQuickActions, getQuickActionsContext, getLatestResumableOnboardingRun, getOnboardingRun, quarantineOnboardingRun } from './db'
+import { TITLE_SYSTEM_PROMPT, buildConversationTitlePrompt, buildFirstMessageTitlePrompt, cleanTitle, fallbackTitleFromText, shouldRegenerateTitle, type TitleMeta } from './titles'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
-import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTitleModel, getQuickActionModel } from './agent'
+import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getQuickActionModel } from './agent'
 import { compactionThresholdTokens, estimateContextTokens } from './context-budget'
 import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
 import { logger } from './log'
@@ -67,6 +68,35 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 let mainWindow: BrowserWindow | null = null
+
+// ─── Session title lifecycle (spec #65, ticket #67) ──────────────────────────
+// One owner: the main process. The fallback lands instantly at send-time; AI
+// titles run on the session's selected chat model; regeneration after the
+// first turn completes; refreshes at turns 3 and 6; then frozen. Manual
+// renames win forever (SQL-guarded write-once).
+const titleEpochs = new Map<number, number>()
+
+function emitSessionsChanged() {
+  mainWindow?.webContents.send('chat:sessionsChanged', {})
+}
+
+/** One AI title generation pass. The epoch guard makes a slower, earlier pass
+ * (e.g. the concurrent first-message one) abort its write when a later pass
+ * (post-turn, richer input) has already started. */
+async function generateAiTitle(sessionId: number, model: string | undefined, prompt: string, turn: number): Promise<void> {
+  const epoch = (titleEpochs.get(sessionId) ?? 0) + 1
+  titleEpochs.set(sessionId, epoch)
+  try {
+    const raw = await generateText([{ role: 'user', content: prompt }], TITLE_SYSTEM_PROMPT, model ? { model } : undefined)
+    const title = cleanTitle(raw)
+    if (!title) return
+    if (titleEpochs.get(sessionId) !== epoch) return // superseded by a newer pass
+    if (updateChatSessionTitleSmart(sessionId, title, 'ai', turn)) emitSessionsChanged()
+  } catch (e: any) {
+    logger.warn('main', `AI title generation failed (fail open on fallback): ${e?.message || e}`)
+  }
+}
+
 let tray: Tray | null = null
 
 // ─── Single instance lock ───────────────────────────────────────────────────
@@ -1400,6 +1430,24 @@ function setupIpc() {
     // turn start with pending=1; checkpoints flush partial content into it;
     // the renderer finalizes it on completion (or it renders as interrupted).
     const assistantMessageId = sessionId != null ? addPendingChatMessage(sessionId) : null
+    // Title lifecycle (ticket #67): instant fallback on the very first send,
+    // then the concurrent AI pass from the first user message on the
+    // session's selected model while the turn runs.
+    if (sessionId != null) {
+      let titleMeta: TitleMeta = getChatSessionTitleMeta(sessionId)
+      const turnCount = messages.filter(m => m.role === 'user').length
+      if (titleMeta.kind == null) {
+        const firstUser = messages.find(m => m.role === 'user')
+        const fallback = fallbackTitleFromText(typeof firstUser?.content === 'string' ? firstUser.content : '')
+        if (updateChatSessionTitleSmart(sessionId, fallback, 'fallback', 0)) emitSessionsChanged()
+        titleMeta = getChatSessionTitleMeta(sessionId)
+      }
+      if (titleMeta.kind === 'fallback') {
+        const firstUser = messages.find(m => m.role === 'user')
+        const prompt = buildFirstMessageTitlePrompt(typeof firstUser?.content === 'string' ? firstUser.content : '')
+        void generateAiTitle(sessionId, options?.model, prompt, turnCount)
+      }
+    }
     const run: ActiveChatRun = {
       abortController: new AbortController(),
       injectedMessages: []
@@ -1461,6 +1509,17 @@ function setupIpc() {
       })
 
       logger.info('main', `chat:send done — ${chunks.join('').length} chars`)
+      // Title lifecycle (ticket #67): after the turn completes, regenerate at
+      // the refresh points (post-first-turn for accuracy — owner request —
+      // then turns 3 and 6, then frozen). Manual renames never regenerate.
+      if (sessionId != null) {
+        const meta = getChatSessionTitleMeta(sessionId)
+        const turnCount = messages.filter(m => m.role === 'user').length
+        if (shouldRegenerateTitle(meta, turnCount)) {
+          const digest = messages.map(m => `${m.role}: ${m.content}`).join('\n').slice(-4000)
+          void generateAiTitle(sessionId, options?.model, buildConversationTitlePrompt(digest), turnCount)
+        }
+      }
       return { fullText: chunks.join(''), assistantMessageId }
     } finally {
       activeChatRuns.delete(sid)
@@ -1535,29 +1594,15 @@ function setupIpc() {
   })
 
   ipcMain.handle('chat:updateTitle', (_e, sessionId: number, title: string) => {
-    updateChatSessionTitle(sessionId, title)
+    // Manual rename (ticket #67): wins forever — blocks all automatic writes.
+    renameChatSession(sessionId, title)
+    emitSessionsChanged()
     return { success: true }
   })
 
   ipcMain.handle('chat:deleteSession', (_e, sessionId: number) => {
     deleteChatSession(sessionId)
     return { success: true }
-  })
-
-  ipcMain.handle('chat:generateTitle', async (_e, sessionId: number, messages: { role: string; content: string }[]) => {
-    logger.info('main', 'chat:generateTitle')
-    try {
-      const text = messages.map(m => `${m.role}: ${m.content}`).join('\n').slice(0, 3000)
-      const title = await generateText([
-        { role: 'user', content: `Generate a brief (under 6 words) title for this conversation:\n\n${text}` }
-      ], 'You generate concise conversation titles. Return only the title, no explanation, no quotes.', { model: getTitleModel() })
-      const clean = title.replace(/["'"]/g, '').trim().slice(0, 60)
-      updateChatSessionTitle(sessionId, clean || 'New Chat')
-      return { success: true, title: clean }
-    } catch (e: any) {
-      logger.error('main', 'chat:generateTitle error', e.message)
-      return { success: false, title: null }
-    }
   })
 
   ipcMain.handle('chat:getSessionSummary', (_e, sessionId: number) => {
@@ -1576,22 +1621,6 @@ function setupIpc() {
       contextTokens,
       compactsAtTokens: compactionThresholdTokens(),
       compacted: !!getChatSessionContextSummary(sessionId),
-    }
-  })
-
-  ipcMain.handle('chat:reTitle', async (_e, sessionId: number, messages: { role: string; content: string }[]) => {
-    logger.info('main', 'chat:reTitle')
-    try {
-      const text = messages.map(m => `${m.role}: ${m.content}`).join('\n').slice(-4000)
-      const title = await generateText([
-        { role: 'user', content: `Generate a brief (under 6 words) title capturing the current topic of this conversation:\n\n${text}` }
-      ], 'You generate concise conversation titles. Return only the title, no explanation, no quotes.')
-      const clean = title.replace(/["'"]/g, '').trim().slice(0, 60)
-      if (clean) updateChatSessionTitle(sessionId, clean)
-      return { success: true, title: clean }
-    } catch (e: any) {
-      logger.error('main', 'chat:reTitle error', e.message)
-      return { success: false }
     }
   })
 

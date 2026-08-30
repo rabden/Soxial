@@ -101,11 +101,15 @@ const api = {
   finalizeAssistantMessage: (id: number, content: string, reasoning?: string) => ipcRenderer.invoke('chat:finalizeAssistantMessage', id, content, reasoning),
   updateSessionTitle: (sessionId: number, title: string) => ipcRenderer.invoke('chat:updateTitle', sessionId, title),
   deleteSession: (sessionId: number) => ipcRenderer.invoke('chat:deleteSession', sessionId),
-  generateTitle: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:generateTitle', sessionId, messages),
+
+  onSessionsChanged: (cb: () => void) => {
+    const listener = () => cb()
+    ipcRenderer.on('chat:sessionsChanged', listener)
+    return () => { ipcRenderer.off('chat:sessionsChanged', listener) }
+  },
 
   getSessionSummary: (sessionId: number) => ipcRenderer.invoke('chat:getSessionSummary', sessionId),
   contextState: (sessionId: number, model?: string) => ipcRenderer.invoke('chat:contextState', sessionId, model),
-  reTitle: (sessionId: number, messages: { role: string; content: string }[]) => ipcRenderer.invoke('chat:reTitle', sessionId, messages),
   generateQuickActions: () => ipcRenderer.invoke('chat:generateQuickActions'),
   getMedia: (filename: string) => ipcRenderer.invoke('get:media', filename),
   fetchLinkPreview: (url: string) => ipcRenderer.invoke('link:preview', url),
