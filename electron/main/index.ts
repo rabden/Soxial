@@ -7,8 +7,7 @@ import { getDb, getProfile, updateProfile, createChatSession, getChatSessions, g
 import { TITLE_SYSTEM_PROMPT, buildConversationTitlePrompt, buildFirstMessageTitlePrompt, cleanTitle, fallbackTitleFromText, shouldRegenerateTitle, type TitleMeta } from './titles'
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
-import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getQuickActionModel } from './agent'
-import { buildChatFallbackChain } from './providers'
+import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getTrivialModelCandidates } from './agent'
 import { compactionThresholdTokens, estimateContextTokens } from './context-budget'
 import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
 import { logger } from './log'
@@ -97,19 +96,18 @@ function emitSessionsChanged() {
   mainWindow?.webContents.send('chat:sessionsChanged', {})
 }
 
-/** One AI title generation pass. The epoch guard makes a slower, earlier pass
- * (e.g. the concurrent first-message one) abort its write when a later pass
- * (post-turn, richer input) has already started. On transient/network
- * failures it rotates once through the fallback chain instead of failing
- * open immediately (session 4 saw Zhipu `Cannot connect` leave a fallback
- * title stuck). */
-async function generateAiTitle(sessionId: number, model: string | undefined, prompt: string, turn: number): Promise<void> {
+/** One AI title generation pass via the user-configured trivial model.
+ * The epoch guard makes a slower, earlier pass (e.g. the concurrent
+ * first-message one) abort its write when a later pass (post-turn, richer
+ * input) has already started. On transient failures it rotates through the
+ * trivial fallback chain (per-provider defaults) instead of failing open. */
+async function generateAiTitle(sessionId: number, _model: string | undefined, prompt: string, turn: number): Promise<void> {
+  void _model // kept for call-site compat; trivial model is now user-selectable in Settings
   const epoch = (titleEpochs.get(sessionId) ?? 0) + 1
   titleEpochs.set(sessionId, epoch)
-  const chain = buildChatFallbackChain()
-  const candidates = model ? [model, ...chain.filter(m => m !== model)] : chain
+  const candidates = getTrivialModelCandidates()
   let lastError: any = null
-  for (const candidate of candidates.slice(0, 2)) {
+  for (const candidate of candidates.slice(0, 3)) {
     try {
       const raw = await generateText([{ role: 'user', content: prompt }], TITLE_SYSTEM_PROMPT, { model: candidate })
       const title = cleanTitle(raw)
@@ -120,7 +118,7 @@ async function generateAiTitle(sessionId: number, model: string | undefined, pro
     } catch (e: any) {
       lastError = e
       const msg = String(e?.message || '').toLowerCase()
-      const transient = msg.includes('cannot connect') || msg.includes('fetch failed') || msg.includes('timeout') || msg.includes('econn') || msg.includes('quota') || msg.includes('429') || msg.includes('overloaded')
+      const transient = msg.includes('cannot connect') || msg.includes('fetch failed') || msg.includes('timeout') || msg.includes('econn') || msg.includes('quota') || msg.includes('429') || msg.includes('overloaded') || msg.includes('exhausted')
       if (!transient) break
       logger.warn('main', `AI title generation via ${candidate} failed transiently, trying next: ${e?.message || e}`)
     }
@@ -1722,9 +1720,24 @@ async function generateQuickActions(): Promise<string[]> {
   quickActionsActive = true
   try {
     const context = getQuickActionsContext()
-    const text = await generateText([
-      { role: 'user', content: `Based on this profile and strategy context, suggest 5 specific, actionable things the user could ask their social media AI agent to do right now. Each suggestion must be a single concise sentence under 10 words. Return them as a JSON array of strings, no markdown, no numbering.\n\nContext:\n${context}` }
-    ], 'You generate personalized quick-action suggestions for a social media AI agent app.', { model: getQuickActionModel() })
+    const candidates = getTrivialModelCandidates()
+    let text: string | null = null
+    let lastError: any = null
+    for (const candidate of candidates.slice(0, 3)) {
+      try {
+        text = await generateText([
+          { role: 'user', content: `Based on this profile and strategy context, suggest 5 specific, actionable things the user could ask their social media AI agent to do right now. Each suggestion must be a single concise sentence under 10 words. Return them as a JSON array of strings, no markdown, no numbering.\n\nContext:\n${context}` }
+        ], 'You generate personalized quick-action suggestions for a social media AI agent app.', { model: candidate })
+        break
+      } catch (e: any) {
+        lastError = e
+        const msg = String(e?.message || '').toLowerCase()
+        const transient = msg.includes('cannot connect') || msg.includes('fetch failed') || msg.includes('timeout') || msg.includes('econn') || msg.includes('quota') || msg.includes('429') || msg.includes('overloaded') || msg.includes('exhausted')
+        if (!transient) throw e
+        logger.warn('main', `quick actions via ${candidate} failed transiently, trying next: ${e?.message || e}`)
+      }
+    }
+    if (text == null) throw lastError ?? new Error('No trivial model available')
     let suggestions: string[]
     try {
       const parsed = JSON.parse(text)

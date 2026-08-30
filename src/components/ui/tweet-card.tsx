@@ -728,10 +728,10 @@ export function TweetCard({
                   e.stopPropagation()
                   if (!preview) setReplyOpen(true)
                 }}
-                className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors -ml-1.5"
+                className="group/tweet flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors -ml-1.5"
                 aria-label="Reply"
               >
-                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                <div className="p-1.5 rounded-full group-hover/tweet:bg-[#1D9BF0]/10 transition-colors">
                   <MessageCircle className="size-4" />
                 </div>
                 {(displayData.replies ?? 0) + extraReplies > 0 && (
@@ -744,13 +744,13 @@ export function TweetCard({
                 type="button"
                 onClick={handleRetweet}
                 className={cn(
-                  'group flex items-center gap-1.5 transition-colors',
+                  'group/tweet flex items-center gap-1.5 transition-colors',
                   retweeted ? 'text-[#00BA7C]' : 'hover:text-[#00BA7C]'
                 )}
                 aria-label={retweeted ? 'Unrepost' : 'Repost'}
                 aria-pressed={retweeted}
               >
-                <div className={cn('p-1.5 rounded-full transition-colors', retweeted ? 'bg-[#00BA7C]/10' : 'group-hover:bg-[#00BA7C]/10')}>
+                <div className={cn('p-1.5 rounded-full transition-colors', retweeted ? 'bg-[#00BA7C]/10' : 'group-hover/tweet:bg-[#00BA7C]/10')}>
                   <Repeat2 className={cn('size-4', retweeted && 'fill-current')} />
                 </div>
                 {retweetCount > 0 && (
@@ -763,13 +763,13 @@ export function TweetCard({
                 type="button"
                 onClick={handleLike}
                 className={cn(
-                  'group flex items-center gap-1.5 transition-colors',
+                  'group/tweet flex items-center gap-1.5 transition-colors',
                   liked ? 'text-[#F91880]' : 'hover:text-[#F91880]'
                 )}
                 aria-label={liked ? 'Unlike' : 'Like'}
                 aria-pressed={liked}
               >
-                <div className={cn('p-1.5 rounded-full transition-colors', liked ? 'bg-[#F91880]/10' : 'group-hover:bg-[#F91880]/10')}>
+                <div className={cn('p-1.5 rounded-full transition-colors', liked ? 'bg-[#F91880]/10' : 'group-hover/tweet:bg-[#F91880]/10')}>
                   <Heart className={cn('size-4', liked && 'fill-[#F91880] text-[#F91880]')} />
                 </div>
                 {likeCount > 0 && (
@@ -778,8 +778,8 @@ export function TweetCard({
               </button>
 
               {/* Views */}
-              <div className="group flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors">
-                <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+              <div className="group/tweet flex items-center gap-1.5 hover:text-[#1D9BF0] transition-colors">
+                <div className="p-1.5 rounded-full group-hover/tweet:bg-[#1D9BF0]/10 transition-colors">
                   <BarChart2 className="size-4" />
                 </div>
                 {displayData.views !== undefined && displayData.views > 0 && (
@@ -793,23 +793,23 @@ export function TweetCard({
                   type="button"
                   onClick={handleBookmark}
                   className={cn(
-                    'group flex items-center transition-colors',
+                    'group/tweet flex items-center transition-colors',
                     bookmarked ? 'text-[#1D9BF0]' : 'hover:text-[#1D9BF0]'
                   )}
                   aria-label={bookmarked ? 'Unbookmark' : 'Bookmark'}
                   aria-pressed={bookmarked}
                 >
-                  <div className={cn('p-1.5 rounded-full transition-colors', bookmarked ? 'bg-[#1D9BF0]/10' : 'group-hover:bg-[#1D9BF0]/10')}>
+                  <div className={cn('p-1.5 rounded-full transition-colors', bookmarked ? 'bg-[#1D9BF0]/10' : 'group-hover/tweet:bg-[#1D9BF0]/10')}>
                     <Bookmark className={cn('size-4', bookmarked && 'fill-[#1D9BF0] text-[#1D9BF0]')} />
                   </div>
                 </button>
                 <button
                   type="button"
                   onClick={handleShare}
-                  className="group flex items-center hover:text-[#1D9BF0] transition-colors -mr-1.5"
+                  className="group/tweet flex items-center hover:text-[#1D9BF0] transition-colors -mr-1.5"
                   aria-label={showCopied ? 'Copied' : 'Share'}
                 >
-                  <div className="p-1.5 rounded-full group-hover:bg-[#1D9BF0]/10 transition-colors">
+                  <div className="p-1.5 rounded-full group-hover/tweet:bg-[#1D9BF0]/10 transition-colors">
                     {showCopied ? (
                       // Fixed 16×16 box — same footprint as the Share2 icon.
                       // A bare text span's line box grew the action row by a
@@ -959,7 +959,7 @@ interface TwitterReplyPreviewProps {
 
 export function TwitterReplyPreview({ original, originalId, replyContent, replyId, replyHandle, replyName, onPost, showPostButton, className }: TwitterReplyPreviewProps) {
   return (
-    <div className={cn('w-full max-w-[560px]', className)}>
+    <div className={cn('w-full', className)}>
       {originalId ? <TweetCard variant="feed" tweetId={originalId} /> : <TweetCard variant="feed" {...original} />}
       <div className="ml-6 mt-1 border-l-2 border-border pl-4">
         <div className="rounded-xl bg-muted/50 border border-border p-3.5">

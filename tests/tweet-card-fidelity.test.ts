@@ -224,17 +224,19 @@ describe('TweetCard fidelity and feed variant', () => {
       expect(html).toContain('@sama')
       expect(html).toContain('line-clamp-4')
 
-      // Action bar (6 groups with icons and hover pill classes)
+      // Action bar (6 groups with icons and hover pill classes) — scoped
+      // to the button's own group/tweet so hovering the outer message
+      // doesn't light every row (the bleed fixed in this branch).
       expect(html).toContain('aria-label="Reply"')
-      expect(html).toContain('hover:bg-[#1D9BF0]/10')
+      expect(html).toContain('group-hover/tweet:bg-[#1D9BF0]/10')
       expect(html).toContain('hover:text-[#1D9BF0]')
 
       expect(html).toContain('aria-label="Repost"')
-      expect(html).toContain('hover:bg-[#00BA7C]/10')
+      expect(html).toContain('group-hover/tweet:bg-[#00BA7C]/10')
       expect(html).toContain('hover:text-[#00BA7C]')
 
       expect(html).toContain('aria-label="Like"')
-      expect(html).toContain('hover:bg-[#F91880]/10')
+      expect(html).toContain('group-hover/tweet:bg-[#F91880]/10')
       expect(html).toContain('hover:text-[#F91880]')
 
       expect(html).toContain('aria-label="Bookmark"')

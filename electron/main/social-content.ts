@@ -66,7 +66,11 @@ export function compactTwitterItem(t: any): any {
     bookmarks: m.bookmarks ?? t.bookmarks ?? 0,
     time: t.createdAtLocal || t.createdAt || t.time,
     media,
-    urls: Array.isArray(t.urls) ? t.urls.slice(0, 4) : [],
+    urls: Array.isArray(t.urls) ? t.urls.slice(0, 12) : [],
+    // Full t.co→expanded mapping so the renderer can expand EVERY link in
+    // the text exactly — positional expansion breaks past the slice (the
+    // "first N links expand, rest stay t.co" bug).
+    entities: t.url_entities?.length ? { urls: t.url_entities } : undefined,
     isRetweet: !!t.isRetweet,
   }
 }

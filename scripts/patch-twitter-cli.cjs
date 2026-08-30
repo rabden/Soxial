@@ -73,6 +73,7 @@ const MARKER_PIN = 'SOXIAL-PATCH: pin-entry v1'
 const MARKER_VIEWER = 'SOXIAL-PATCH: viewer-state v1'
 const MARKER_QUOTE = 'SOXIAL-PATCH: quote-media v1'
 const MARKER_FEED_CURSOR = 'SOXIAL-PATCH: feed-cursor v1'
+const MARKER_ENTITIES = 'SOXIAL-PATCH: url-entities v1'
 
 /** Resolve the installed twitter-cli's client.py inside its uv tool venv. */
 function resolveClientPy(explicit) {
@@ -529,6 +530,100 @@ const CLI_FEED_EMIT_NEW = [
   '    title = "👥 Following" if feed_type == "following" else "📱 Twitter"',
 ].join('\n')
 
+// L: url-entities — the parser keeps only `expanded_url` from
+// `legacy.entities.urls`, dropping the t.co→expanded mapping. The UI's
+// positional fallback (Nth t.co → Nth urls entry) then breaks whenever the
+// urls array is shorter than the text's link count (e.g. chat's 4-link
+// compaction): only the first N links expand, the rest stay raw t.co.
+// Emitting the full `{url, expanded_url}` pairs lets the UI expand exactly.
+const PARSER_ENTITIES_OLD = [
+  "    urls = [item.get(\"expanded_url\", \"\") for item in _deep_get(actual_legacy, \"entities\", \"urls\") or []]",
+].join('\n')
+const PARSER_ENTITIES_NEW = [
+  "    urls = [item.get(\"expanded_url\", \"\") for item in _deep_get(actual_legacy, \"entities\", \"urls\") or []]",
+  `    url_entities = [  # ${MARKER_ENTITIES}`,
+  "        {\"url\": item.get(\"url\", \"\"), \"expanded_url\": item.get(\"expanded_url\", \"\")}",
+  "         for item in _deep_get(actual_legacy, \"entities\", \"urls\") or []",
+  "         if item.get(\"url\") and item.get(\"expanded_url\") and item.get(\"url\") != item.get(\"expanded_url\")]",
+].join('\n')
+
+const PARSER_TWEET_ENTITIES_OLD = [
+  "        media=media,",
+  "        urls=urls,",
+].join('\n')
+const PARSER_TWEET_ENTITIES_NEW = [
+  "        media=media,",
+  "        urls=urls,",
+  `        url_entities=url_entities,  # ${MARKER_ENTITIES}-kw`,
+].join('\n')
+
+// v2 — note tweets: X keeps the FULL entity set in
+// `note_tweet...entity_set.urls`; `legacy.entities.urls` is partial for long
+// tweets (4 of 8 links on the repro tweet), so union both (note first — its
+// order matches the note text the parser uses) and derive `urls` from the
+// union. Idempotent upgrade over the v1 block.
+const PARSER_ENTITIES_V2_OLD = [
+  "    urls = [item.get(\"expanded_url\", \"\") for item in _deep_get(actual_legacy, \"entities\", \"urls\") or []]",
+  "    url_entities = [  # SOXIAL-PATCH: url-entities v1",
+  "        {\"url\": item.get(\"url\", \"\"), \"expanded_url\": item.get(\"expanded_url\", \"\")}",
+  "         for item in _deep_get(actual_legacy, \"entities\", \"urls\") or []",
+  "         if item.get(\"url\") and item.get(\"expanded_url\") and item.get(\"url\") != item.get(\"expanded_url\")]",
+].join('\n')
+const PARSER_ENTITIES_V2_NEW = [
+  `    _entity_sources = []  # ${MARKER_ENTITIES}-v2`,
+  "    _note_result = _deep_get(actual_data, \"note_tweet\", \"note_tweet_results\", \"result\") or {}",
+  "    _note_entities = _deep_get(_note_result, \"entity_set\", \"urls\")",
+  "    if isinstance(_note_entities, list):",
+  "        _entity_sources.extend(_note_entities)",
+  "    _legacy_entities = _deep_get(actual_legacy, \"entities\", \"urls\")",
+  "    if isinstance(_legacy_entities, list):",
+  "        _entity_sources.extend(_legacy_entities)",
+  "    _seen_keys = set()",
+  "    _seen_tco = set()",
+  "    url_entities = []",
+  "    urls = []",
+  "    for item in _entity_sources:",
+  "        _u = item.get(\"url\", \"\")",
+  "        _e = item.get(\"expanded_url\", \"\")",
+  "        if not _e:",
+  "            continue",
+  "        _key = _e.lower().split('//', 1)[-1].rstrip('/')",
+  "        if _key in _seen_keys:",
+  "            continue",
+  "        _seen_keys.add(_key)",
+  "        urls.append(_e)",
+  "        if not _u or _u == _e or _u in _seen_tco:",
+  "            continue",
+  "        _seen_tco.add(_u)",
+  "        url_entities.append({\"url\": _u, \"expanded_url\": _e})",
+].join('\n')
+
+const MODELS_ENTITIES_OLD = [
+  "    media: List[TweetMedia] = field(default_factory=list)",
+  "    urls: List[str] = field(default_factory=list)",
+].join('\n')
+const MODELS_ENTITIES_NEW = [
+  "    media: List[TweetMedia] = field(default_factory=list)",
+  "    urls: List[str] = field(default_factory=list)",
+  `    url_entities: List[dict] = field(default_factory=list)  # ${MARKER_ENTITIES}`,
+].join('\n')
+
+const SERIALIZATION_ENTITIES_OLD = [
+  '        "urls": list(tweet.urls),',
+].join('\n')
+const SERIALIZATION_ENTITIES_NEW = [
+  '        "urls": list(tweet.urls),',
+  `        "entities": {"urls": tweet.url_entities},  # ${MARKER_ENTITIES}-tweet`,
+].join('\n')
+
+const SERIALIZATION_QUOTE_ENTITIES_OLD = [
+  '            "urls": list(tweet.quoted_tweet.urls),',
+].join('\n')
+const SERIALIZATION_QUOTE_ENTITIES_NEW = [
+  '            "urls": list(tweet.quoted_tweet.urls),',
+  `            "entities": {"urls": tweet.quoted_tweet.url_entities},  # ${MARKER_ENTITIES}-quote`,
+].join('\n')
+
 // E: fallback IDs refreshed 2026-08-28 from https://raw.githubusercontent.com/fa0311/twitter-openapi/refs/heads/main/src/config/placeholder.json
 const FALLBACK_UPDATES = {
   HomeTimeline: '7zlnp2TxC044W4C1ZUJMHw',
@@ -637,6 +732,18 @@ function applyPinnedPatches(dir) {
     ['serialization.py', SERIALIZATION_QUOTE_OLD, SERIALIZATION_QUOTE_NEW, MARKER_QUOTE],
     // Upgrade existing quote-media v1 (author without avatar/verified) in-place
     ['serialization.py', SERIALIZATION_QUOTE_V1_OLD, SERIALIZATION_QUOTE_V1_NEW, 'profileImageUrl": tweet.quoted_tweet.author.profile_image_url'],
+    // L — url-entities: keep the t.co→expanded mapping so the UI can expand
+    // every link exactly, not just the first `len(urls)` positionally.
+    // Per-entry marker suffixes: inserted comments contain the bare marker
+    // as a substring, so a shared marker would make the second entry in the
+    // same file skip itself.
+    ['parser.py', PARSER_ENTITIES_OLD, PARSER_ENTITIES_NEW, MARKER_ENTITIES],
+    ['parser.py', PARSER_TWEET_ENTITIES_OLD, PARSER_TWEET_ENTITIES_NEW, MARKER_ENTITIES + '-kw'],
+    ['models.py', MODELS_ENTITIES_OLD, MODELS_ENTITIES_NEW, MARKER_ENTITIES],
+    ['serialization.py', SERIALIZATION_QUOTE_ENTITIES_OLD, SERIALIZATION_QUOTE_ENTITIES_NEW, MARKER_ENTITIES],
+    ['serialization.py', SERIALIZATION_ENTITIES_OLD, SERIALIZATION_ENTITIES_NEW, MARKER_ENTITIES + '-tweet'],
+    // v2: union note_tweet entity_set (full map for long tweets) with legacy
+    ['parser.py', PARSER_ENTITIES_V2_OLD, PARSER_ENTITIES_V2_NEW, MARKER_ENTITIES + '-v2'],
   ]) {
     const filePath = path.join(dir, file)
     if (!fs.existsSync(filePath)) {
