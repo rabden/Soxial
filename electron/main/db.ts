@@ -313,6 +313,25 @@ function initSchema(db: Database.Database) {
     db.exec('ALTER TABLE chat_messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0')
   }
 
+  // Repair: heal invalid truncated stubs from the first 40k cap ship (ticket #71).
+  // The initial truncation wrote `{storedTruncated, preview}` without a `type`
+  // discriminator, which fails `modelMessageSchema` on reuse (session 4).
+  // This is idempotent — re-encodes any already-persisted invalid envelope.
+  try {
+    const rows = db.prepare("SELECT id, steps_json FROM chat_sessions WHERE steps_json LIKE '%\"storedTruncated\":true%'").all() as any[]
+    for (const row of rows) {
+      const repaired = decodeStepsFromStorage(row.steps_json)
+      if (!repaired) continue
+      const fixed = JSON.stringify({ v: 1, steps: repaired })
+      if (fixed !== row.steps_json) {
+        db.prepare('UPDATE chat_sessions SET steps_json = ? WHERE id = ?').run(fixed, row.id)
+        logger.info('db', `repaired invalid truncated transcript in session ${row.id}`)
+      }
+    }
+  } catch (e: any) {
+    logger.warn('db', `transcript stub repair failed: ${e?.message || e}`)
+  }
+
   // Migration: add puter_token if missing
   const profileCols = db.pragma('table_info(user_profile)') as any[]
   if (!profileCols.some((c: any) => c.name === 'puter_token')) {

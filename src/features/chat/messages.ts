@@ -60,7 +60,6 @@ export function buildApiMessages(messages: ChatMessage[]): ApiMessage[] {
     if (message.isToolAnswer) continue
     if (message.role === 'user') {
       const parts: NonNullable<ApiMessage['parts']> = []
-      if (message.content.trim()) parts.push({ text: message.content })
       for (const attachment of message.attachments || []) {
         parts.push({
           inlineData: {
@@ -69,6 +68,11 @@ export function buildApiMessages(messages: ChatMessage[]): ApiMessage[] {
           },
         })
       }
+      // `content` holds the text; `parts` holds only binary attachments.
+      // Previously we also pushed the same text into `parts`, which
+      // `toModelMessages` then turned into a duplicate text part on every
+      // user turn (steps[0] had two identical blocks). That doubles tokens
+      // and is not needed.
       result.push({ role: 'user', content: message.content, parts: parts.length ? parts : undefined })
       continue
     }

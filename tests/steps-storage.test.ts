@@ -38,7 +38,7 @@ describe('steps envelope', () => {
 })
 
 describe('stored tool-result caps', () => {
-  it('truncates oversized outputs into an explicit stub', () => {
+  it('truncates oversized outputs into a valid text stub', () => {
     const steps = [
       { role: 'user', content: 'q' },
       {
@@ -50,9 +50,9 @@ describe('stored tool-result caps', () => {
     ]
     const encoded = JSON.parse(encodeStepsForStorage(steps))
     const part = encoded.steps[1].content[0]
-    expect(part.output.storedTruncated).toBe(true)
-    expect(part.output.originalChars).toBeGreaterThan(STORED_TOOL_RESULT_MAX_CHARS)
-    expect(part.output.preview.length).toBeLessThanOrEqual(2_000)
+    expect(part.output.type).toBe('text')
+    expect(part.output.value).toContain('Tool result truncated')
+    expect(part.output.value.length).toBeLessThan(STORED_TOOL_RESULT_MAX_CHARS)
   })
 
   it('leaves small outputs untouched and never mutates the caller array', () => {
@@ -77,8 +77,31 @@ describe('stored tool-result caps', () => {
       },
     ]
     const encoded = JSON.parse(encodeStepsForStorage(steps))
-    expect(encoded.steps[0].content[0].output.storedTruncated).toBe(true)
-    expect(encoded.steps[0].content[0].output.originalChars).toBeGreaterThan(3_000_000 - 1000)
+    expect(encoded.steps[0].content[0].output.type).toBe('text')
+    expect(encoded.steps[0].content[0].output.value).toContain('Tool result truncated')
+  })
+
+  it('repairs legacy invalid stubs on decode (session 4 regression)', () => {
+    const legacyInvalid = JSON.stringify({
+      v: 1,
+      steps: [
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_abc',
+              toolName: 'reddit_read',
+              output: { storedTruncated: true, originalChars: 43124, preview: '{"type":"json"...' },
+            },
+          ],
+        },
+      ],
+    })
+    const decoded = decodeStepsFromStorage(legacyInvalid)
+    expect(decoded).not.toBeNull()
+    expect(decoded![0].content[0].output.type).toBe('text')
+    expect(decoded![0].content[0].output.value).toContain('Tool result truncated')
   })
 })
 

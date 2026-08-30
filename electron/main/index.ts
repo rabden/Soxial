@@ -8,6 +8,7 @@ import { TITLE_SYSTEM_PROMPT, buildConversationTitlePrompt, buildFirstMessageTit
 import { ensureCliInstalled, ensureRdtAuth, ensureTwitterAuth, ensureTwitterCliPatched } from './cli'
 import { gatherOnboardingSocialData } from './social-content'
 import { runAgent, generateText, ONBOARDING_SYSTEM_PROMPT, getOnboardingSystemPrompt, createOnboardingTools, installOnboardingAnswerListener, clearPendingQuestions, cancelPendingQuestionsForRun, createChatTools, installChatAnswerListener, clearPendingChatQuestions, getOnboardingFallbackChain, getQuickActionModel } from './agent'
+import { buildChatFallbackChain } from './providers'
 import { compactionThresholdTokens, estimateContextTokens } from './context-budget'
 import { isTwitterHandleRebuildActive } from './twitter-handle-rebuild'
 import { logger } from './log'
@@ -98,19 +99,33 @@ function emitSessionsChanged() {
 
 /** One AI title generation pass. The epoch guard makes a slower, earlier pass
  * (e.g. the concurrent first-message one) abort its write when a later pass
- * (post-turn, richer input) has already started. */
+ * (post-turn, richer input) has already started. On transient/network
+ * failures it rotates once through the fallback chain instead of failing
+ * open immediately (session 4 saw Zhipu `Cannot connect` leave a fallback
+ * title stuck). */
 async function generateAiTitle(sessionId: number, model: string | undefined, prompt: string, turn: number): Promise<void> {
   const epoch = (titleEpochs.get(sessionId) ?? 0) + 1
   titleEpochs.set(sessionId, epoch)
-  try {
-    const raw = await generateText([{ role: 'user', content: prompt }], TITLE_SYSTEM_PROMPT, model ? { model } : undefined)
-    const title = cleanTitle(raw)
-    if (!title) return
-    if (titleEpochs.get(sessionId) !== epoch) return // superseded by a newer pass
-    if (updateChatSessionTitleSmart(sessionId, title, 'ai', turn)) emitSessionsChanged()
-  } catch (e: any) {
-    logger.warn('main', `AI title generation failed (fail open on fallback): ${e?.message || e}`)
+  const chain = buildChatFallbackChain()
+  const candidates = model ? [model, ...chain.filter(m => m !== model)] : chain
+  let lastError: any = null
+  for (const candidate of candidates.slice(0, 2)) {
+    try {
+      const raw = await generateText([{ role: 'user', content: prompt }], TITLE_SYSTEM_PROMPT, { model: candidate })
+      const title = cleanTitle(raw)
+      if (!title) return
+      if (titleEpochs.get(sessionId) !== epoch) return // superseded by a newer pass
+      if (updateChatSessionTitleSmart(sessionId, title, 'ai', turn)) emitSessionsChanged()
+      return
+    } catch (e: any) {
+      lastError = e
+      const msg = String(e?.message || '').toLowerCase()
+      const transient = msg.includes('cannot connect') || msg.includes('fetch failed') || msg.includes('timeout') || msg.includes('econn') || msg.includes('quota') || msg.includes('429') || msg.includes('overloaded')
+      if (!transient) break
+      logger.warn('main', `AI title generation via ${candidate} failed transiently, trying next: ${e?.message || e}`)
+    }
   }
+  logger.warn('main', `AI title generation failed (fail open on fallback): ${lastError?.message || lastError}`)
 }
 
 let tray: Tray | null = null
