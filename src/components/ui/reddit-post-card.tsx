@@ -226,19 +226,24 @@ export function RedditPostCard({
     ? [loadedComment, ...(displayData.comments || [])]
     : displayData.comments
 
-  const postUrl = displayData.url || `https://reddit.com/r/${displayData.subreddit}`
+  // The agent sometimes includes the r//u/ prefixes the prompt used to show —
+  // normalize so the card never renders r/r/example or u/u/name.
+  const cleanSubreddit = (displayData.subreddit || '').replace(/^r\//, '')
+  const cleanAuthor = (displayData.author || '').replace(/^u\//, '')
+
+  const postUrl = displayData.url || `https://reddit.com/r/${cleanSubreddit}`
   const displayText = displayData.selftext ? (displayData.selftext.length > 280 ? displayData.selftext.slice(0, 280) + '...' : displayData.selftext) : null
 
   const renderCardContent = () => (
     <>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        {displayData.subreddit && (
+        {cleanSubreddit && (
           <>
-            <span className="font-medium text-foreground">r/{displayData.subreddit}</span>
+            <span className="font-medium text-foreground">r/{cleanSubreddit}</span>
             <span>·</span>
           </>
         )}
-        {displayData.author && <span>u/{displayData.author}</span>}
+        {cleanAuthor && <span>u/{cleanAuthor}</span>}
         {displayData.createdUtc && (<><span>·</span><span>{timeAgo(displayData.createdUtc)}</span></>)}
       </div>
 
@@ -316,32 +321,51 @@ export function RedditReplyPreview({
 }: RedditReplyPreviewProps) {
   const resolvedPostId = postId || originalId
   const draftText = replyContent || reply || ''
+  const isDraft = !replyId || !resolvedPostId
+  const draftAuthor = (replyName || 'You').replace(/^u\//, '')
+
+  // Posted reply: one post card with the reply highlighted in its comment
+  // tree. (Previously the post rendered twice — once on top, once inside.)
+  if (!isDraft) {
+    return (
+      <div className={cn('w-full max-w-[560px]', className)}>
+        <RedditPostCard id={resolvedPostId} commentId={replyId} />
+      </div>
+    )
+  }
 
   return (
+    // Reddit-native thread: post card + comment-tree draft. Same width and
+    // card chrome as reddit-post — deliberately no Twitter visuals.
     <div className={cn('w-full max-w-[560px]', className)}>
+      <div className="flex items-center gap-2 px-1 pb-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          Proposed comment{draftAuthor !== 'You' ? ` as ${draftAuthor}` : ''}
+        </span>
+        {showPostButton && onPost && (
+          <button onClick={onPost} className="ml-auto flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-colors">
+            <Send className="size-3.5" />
+            Send
+          </button>
+        )}
+      </div>
       {resolvedPostId ? (
         <RedditPostCard id={resolvedPostId} commentId={commentId} />
       ) : (
         <RedditPostCard {...original} />
       )}
-      <div className="ml-6 mt-1 border-l-2 border-border pl-4">
-        <div className="rounded-xl bg-muted/50 border border-border p-3.5">
-          <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
-              {replyId ? 'Reddit reply' : `Proposed Reddit reply ${replyName ? `as ${replyName}` : ''}`}
-            </span>
-            {showPostButton && onPost && (
-              <button onClick={onPost} className="ml-auto flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-colors">
-                <Send className="size-3.5" />
-                Send
-              </button>
-            )}
+      <div className="ml-4 mt-3">
+        <div className="pl-3 border-l border-border/50 py-1">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">u/{draftAuthor}</span>
+            <span>just now</span>
           </div>
-          {replyId && resolvedPostId ? (
-            <RedditPostCard id={resolvedPostId} commentId={replyId} />
-          ) : (
-            <p className="text-[14px] leading-5 text-foreground whitespace-pre-wrap">{draftText}</p>
-          )}
+          <p className="mt-1 text-[13px] text-foreground leading-relaxed whitespace-pre-wrap">{draftText}</p>
+          <div className="mt-2 flex items-center gap-3 text-muted-foreground opacity-50 pointer-events-none" aria-hidden>
+            <ArrowBigUp className="size-4" />
+            <ArrowBigDown className="size-4" />
+            <MessageCircle className="size-3.5" />
+          </div>
         </div>
       </div>
     </div>
