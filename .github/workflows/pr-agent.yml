@@ -1,10 +1,12 @@
 name: pr-agent review
 
-# Model IDs come from OpenCode Zen (https://opencode.ai/docs/zen); free
-# models rotate often, so switch them via repo variables without a commit.
+# Primary model is Google AI Studio Gemini; fallback is the Zen primary.
+# Switch them via repo variables without a commit:
+# - GEMINI_PRIMARY_MODEL (e.g. gemini-3.8-flash)
+# - ZEN_PRIMARY_MODEL (e.g. muse-spark-1.3-contributor-free, see https://opencode.ai/docs/zen)
 env:
-  ZEN_PRIMARY_MODEL: ${{ vars.ZEN_PRIMARY_MODEL || 'x-preview-f-free' }}
-  ZEN_FALLBACK_MODEL: ${{ vars.ZEN_FALLBACK_MODEL || 'big-pickle' }}
+  GEMINI_PRIMARY_MODEL: ${{ vars.GEMINI_PRIMARY_MODEL || 'gemini-3.8-flash' }}
+  ZEN_PRIMARY_MODEL: ${{ vars.ZEN_PRIMARY_MODEL || 'muse-spark-1.3-contributor-free' }}
 
 concurrency:
   group: pr-agent-${{ github.event.pull_request.number }}
@@ -16,9 +18,13 @@ on:
 
 jobs:
   pr_agent_job:
+    # Runs for anyone associated with the repo (owner, member, collaborator,
+    # or past contributor) — no hardcoded usernames. First-time/external
+    # fork authors are skipped to protect API quota; drop the second clause
+    # to review literally every PR.
     if: |
       github.repository == 'rabden/Soxial' &&
-      (github.actor == 'rabden' || github.actor == 'kubenstein')
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]'), github.event.pull_request.author_association)
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -30,12 +36,19 @@ jobs:
         uses: qodo-ai/pr-agent@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_AI_STUDIO.GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_KEY: ${{ secrets.ZEN_API_KEY }}
           OPENAI.API_BASE: "https://opencode.ai/zen/v1"
-          config.model: "openai/${{ env.ZEN_PRIMARY_MODEL }}"
-          config.fallback_models: ${{ format('["openai/{0}"]', env.ZEN_FALLBACK_MODEL) }}
-          config.custom_model_max_tokens: "64000"
-          config.custom_reasoning_model: "true"
+          config.model: "gemini/${{ env.GEMINI_PRIMARY_MODEL }}"
+          config.fallback_models: ${{ format('["openai/{0}"]', env.ZEN_PRIMARY_MODEL) }}
+          # Budgets: gemini-3.8-flash is a known 1M model, so max_model_tokens
+          # caps the primary at 300k (free-tier quota). The Zen fallback is
+          # unknown, so custom_model_max_tokens asks 500k — but max_model_tokens
+          # caps everything, so the fallback effectively gets 300k too. Qodo has
+          # no per-model budget; raise max to 500000 to unlock the full Zen
+          # budget (primary then also goes to 500k).
+          config.custom_model_max_tokens: "500000"
+          config.max_model_tokens: "300000"
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "true"
           github_action_config.auto_improve: "false"
