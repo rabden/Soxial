@@ -9,15 +9,46 @@ const SMOOTH =
   "max-width 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), height 0.15s ease-out";
 
 const MODEL_DISPLAY: Record<string, string> = {
-  "gemini-3.6-flash": "Gemini 3.6 Flash",
+  "gemini-3.7-flash": "Gemini 3.7 Flash",
   "gemini-3.1-pro": "Gemini 3.1 Pro",
   "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite",
-  "glm-5.2": "GLM 5.2",
-  "glm-5-turbo": "GLM 5 Turbo",
+  "glm-5.3": "GLM 5.3",
+  "glm-5.3-flash": "GLM 5.3 Flash",
   "glm-4.7-flash": "GLM 4.7 Flash",
   "glm-4.5-flash": "GLM 4.5 Flash",
+  "glm-4.6v-flash": "GLM 4.6V Flash",
+  // Main normalizes at every boundary; these exist only for stale payloads.
+  "gemini-3.6-flash": "Gemini 3.6 Flash",
+  "glm-5.2": "GLM 5.2",
+  "glm-5-turbo": "GLM 5.3 Flash",
+  // Hosted catalogs (kept in sync with electron/main/models.ts defaults).
+  "openai/gpt-5.6-luna": "GPT-5.6 Luna",
+  "openai/gpt-5.6-sol": "GPT-5.6 Sol",
+  "openai/gpt-5.6-terra": "GPT-5.6 Terra",
+  "openai/gpt-5.5": "GPT-5.5",
+  "openai/gpt-5.4-mini": "GPT-5.4 mini",
+  "openai/gpt-5.2": "GPT-5.6 Luna",
+  "openai/gpt-5-mini": "GPT-5.4 mini",
+  "openai/gpt-4.1": "GPT-5.5",
+  "openai/gpt-4o": "GPT-5.6 Luna",
+  "anthropic/claude-sonnet-5": "Claude Sonnet 5",
+  "anthropic/claude-opus-5": "Claude Opus 5",
+  "anthropic/claude-fable-5": "Claude Fable 5",
+  "anthropic/claude-opus-4-1": "Claude Opus 5",
+  "anthropic/claude-sonnet-4-5": "Claude Sonnet 5",
+  "anthropic/claude-haiku-4-5": "Claude Sonnet 5",
 };
-const modelLabel = (id: string) => MODEL_DISPLAY[id] || id;
+
+/** Bare display id for namespaced ids without a known label ('gpt-4o', 'my-model'). */
+function prettifyModelId(id: string): string {
+  if (id.startsWith("custom/")) {
+    const rest = id.slice("custom/".length);
+    const slash = rest.indexOf("/");
+    return slash > 0 ? rest.slice(slash + 1) : rest;
+  }
+  const slash = id.indexOf("/");
+  return slash > 0 ? id.slice(slash + 1) : id;
+}
 
 interface Attachment {
   id: string;
@@ -71,7 +102,37 @@ function ZaiIcon({ className }: { className?: string }) {
   );
 }
 
+function OpenAIIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.7">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 3.5v17M3.5 12h17" opacity="0.55" />
+    </svg>
+  );
+}
+
+function AnthropicIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor">
+      <path d="M13.9 4.5h-3.4L4.5 19.5h3.5l1.2-3.1h6l1.2 3.1H20L13.9 4.5zm-3.7 9l2-5.2 2 5.2h-4z" />
+    </svg>
+  );
+}
+
+function CustomEndpointIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.7">
+      <rect x="4" y="5" width="16" height="6.5" rx="1.5" />
+      <rect x="4" y="14" width="16" height="6.5" rx="1.5" />
+      <path d="M7.5 8.2h.01M7.5 17.2h.01" strokeLinecap="round" strokeWidth="2.2" />
+    </svg>
+  );
+}
+
 function ProviderIcon({ model, className }: { model: string; className?: string }) {
+  if (model.startsWith("openai/")) return <OpenAIIcon className={className} />;
+  if (model.startsWith("anthropic/")) return <AnthropicIcon className={className} />;
+  if (model.startsWith("custom/")) return <CustomEndpointIcon className={className} />;
   return model.startsWith("glm")
     ? <ZaiIcon className={className} />
     : <GoogleIcon className={className} />;
@@ -166,6 +227,8 @@ export interface PromptInputProps {
   placeholder?: string;
   className?: string;
   models?: string[];
+  /** Optional label overrides keyed by model id (custom endpoint catalogs). */
+  modelLabels?: Record<string, string>;
   model?: string;
   efforts?: string[];
   modelSupportsEffort?: (model: string) => boolean;
@@ -184,32 +247,43 @@ export interface PromptInputProps {
   modelExhaustionStatus?: Record<string, { exhausted: boolean; availableAt: string | null }>;
   onModelChange?: (model: string) => void;
   onEffortChange?: (effort: string) => void;
+  /** Live context usage for the current session (ticket #59). Null → no gauge. */
+  contextState?: { usedTokens: number; compactsAtTokens: number; compacted: boolean } | null;
 }
 
 export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
-  ({
-    onSubmit,
-    placeholder = "Ask anything",
-    className,
-    models = ["Gemini 3.5 Flash Lite"],
-    model: controlledModel,
-    efforts = ["Low", "Medium", "High"],
-    modelSupportsEffort = () => true,
-    disabled = false,
-    isStreaming = false,
-    onStop,
-    queue = [],
-    onRemoveQueued,
-    question,
-    onAnswer,
-    modelExhaustionStatus,
-    onModelChange,
-    onEffortChange,
-  }) => {
+  (
+    {
+      onSubmit,
+      placeholder = "Ask anything",
+      className,
+      models = ["Gemini 3.5 Flash Lite"],
+      modelLabels,
+      model: controlledModel,
+      efforts = ["Low", "Medium", "High"],
+      modelSupportsEffort = () => true,
+      disabled = false,
+      isStreaming = false,
+      onStop,
+      queue = [],
+      onRemoveQueued,
+      question,
+      onAnswer,
+      modelExhaustionStatus,
+      onModelChange,
+      onEffortChange,
+      contextState,
+    },
+    forwardedRef,
+  ) => {
     const [expanded, setExpanded] = useState(false);
     const [isSmooth, setIsSmooth] = useState(false);
     const [value, setValue] = useState("");
     const [selectedModel, setSelectedModel] = useState(models[0]);
+
+    // Label resolution order: caller-provided map (custom endpoints), built-in
+    // catalog, then the bare model id with any namespace prefix stripped.
+    const labelFor = (id: string) => modelLabels?.[id] || MODEL_DISPLAY[id] || prettifyModelId(id);
 
     // Keep selectedModel in sync when the `models` prop list changes (e.g. after
     // availableModels loads async). Preserve the user's choice if it's still valid.
@@ -244,6 +318,13 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const internalRef = useRef<HTMLDivElement>(null);
+    // Stable container ref: keeps the internal handle and forwards any
+    // parent-provided ref without re-firing on re-renders.
+    const setContainerNode = useCallback((node: HTMLDivElement | null) => {
+      internalRef.current = node;
+      if (typeof forwardedRef === "function") forwardedRef(node);
+      else if (forwardedRef) forwardedRef.current = node;
+    }, [forwardedRef]);
     const topFadeRef = useRef<HTMLDivElement>(null);
     const bottomFadeRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -461,9 +542,7 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
 
     return (
       <div
-        ref={(node) => {
-          internalRef.current = node;
-        }}
+        ref={setContainerNode}
         onBlur={handleBlur}
         className={cn(
           "relative flex flex-col w-full pointer-events-auto",
@@ -866,13 +945,13 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
               >
                 <ProviderIcon model={selectedModel} className="size-3.5 opacity-70 group-hover:opacity-100" />
                 <span className="text-xs font-semibold">
-                  <MorphingText text={modelLabel(selectedModel)} />
+                  <MorphingText text={labelFor(selectedModel)} />
                 </span>
               </button>
               <div
                 style={{ transformOrigin: "bottom left" }}
                 className={cn(
-                  "absolute bottom-full left-0 mb-2.5 z-50 w-48 rounded-2xl border border-border bg-card/95 p-1 shadow-xl backdrop-blur-md flex flex-col gap-0.5 transition-all duration-400",
+                  "absolute bottom-full left-0 mb-2.5 z-50 w-64 max-h-[min(60vh,24rem)] overflow-y-auto scrollbar-none rounded-2xl border border-border bg-card/95 p-1 shadow-xl backdrop-blur-md flex flex-col gap-0.5 transition-all duration-400",
                   modelOpen
                     ? "opacity-100 scale-100 translate-y-0 pointer-events-auto"
                     : "opacity-0 scale-95 translate-y-3 pointer-events-none",
@@ -916,9 +995,9 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
                       )}
                       disabled={isModelExhausted}
                     >
-                      <span className="flex items-center gap-2">
-                        <ProviderIcon model={model} className="size-3.5 opacity-85 group-hover:opacity-100" />
-                        {modelLabel(model)}
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        <ProviderIcon model={model} className="size-3.5 shrink-0 opacity-85 group-hover:opacity-100" />
+                        <span className="truncate">{labelFor(model)}</span>
                       </span>
                       {isModelExhausted && hoursRemaining != null && hoursRemaining > 0 && (
                         <span className="ml-auto text-[10px] text-muted-foreground/60">
@@ -930,6 +1009,41 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
                 })}
               </div>
             </div>
+
+            {/* Context ring (ticket #59 + follow-up): circular progress toward
+                the flat 180k compaction line, fed live from per-step usage
+                ground truth. Sits beside the attach button. */}
+            {contextState && contextState.compactsAtTokens > 0 && (() => {
+              const ratio = Math.min(1, contextState.usedTokens / contextState.compactsAtTokens);
+              const ringColor =
+                ratio >= 0.85 ? "stroke-red-400/80" : ratio >= 0.7 ? "stroke-amber-400/80" : "stroke-foreground/30";
+              const circumference = 2 * Math.PI * 7.5;
+              return (
+                <span
+                  data-testid="context-gauge"
+                  title={`~${Math.round(contextState.usedTokens / 1000)}k of the ${Math.round(contextState.compactsAtTokens / 1000)}k compaction line${contextState.compacted ? " · compacted history" : ""}`}
+                  className="ml-auto mr-1 flex size-[22px] items-center justify-center"
+                >
+                  <svg viewBox="0 0 18 18" className="absolute size-[22px]" aria-hidden="true">
+                    <circle cx="9" cy="9" r="7.5" fill="none" strokeWidth="1.6" className="stroke-white/10" />
+                    <circle
+                      data-testid="context-gauge-ring"
+                      cx="9" cy="9" r="7.5" fill="none" strokeWidth="1.6" strokeLinecap="round"
+                      strokeDasharray={circumference}
+                      strokeDashoffset={circumference * (1 - ratio)}
+                      transform="rotate(-90 9 9)"
+                      className={cn("transition-[stroke-dashoffset,stroke] duration-500", ringColor)}
+                    />
+                  </svg>
+                  <span
+                    data-testid="context-gauge-percent"
+                    className="relative text-[8px] font-semibold tabular-nums text-foreground/45 leading-none"
+                  >
+                    {Math.min(100, Math.round(ratio * 100))}
+                  </span>
+                </span>
+              );
+            })()}
 
             {/* Effort toggle - only for models that support it */}
             {showEffort && (
@@ -952,7 +1066,10 @@ export const PromptInput = React.forwardRef<HTMLDivElement, PromptInputProps>(
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => fileInputRef.current?.click()}
               disabled={attachments.length >= 6}
-              className="ml-auto flex size-7 items-center justify-center rounded-full text-foreground/50 transition-all hover:bg-accent/60 hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
+              className={cn(
+                "flex size-7 items-center justify-center rounded-full text-foreground/50 transition-all hover:bg-accent/60 hover:text-foreground disabled:opacity-40 disabled:pointer-events-none",
+                !contextState && "ml-auto",
+              )}
             >
               <PlusIcon />
             </button>

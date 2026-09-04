@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const { execSync } = require('child_process')
-const { unlinkSync, existsSync } = require('fs')
+const { existsSync, rmSync, unlinkSync } = require('fs')
 const { homedir } = require('os')
 const { join, dirname } = require('path')
 
@@ -8,15 +8,19 @@ const APP_NAME = 'Soxial'
 
 const DB_FILENAME = 'soxial.db'
 
-function dbPath() {
+function userDataDir() {
   const platform = process.platform
   if (platform === 'win32') {
-    return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), APP_NAME, DB_FILENAME)
+    return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), APP_NAME)
   }
   if (platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', APP_NAME, DB_FILENAME)
+    return join(homedir(), 'Library', 'Application Support', APP_NAME)
   }
-  return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), APP_NAME, DB_FILENAME)
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), APP_NAME)
+}
+
+function dbPath() {
+  return join(userDataDir(), DB_FILENAME)
 }
 
 function step(label, fn) {
@@ -50,6 +54,24 @@ step(`Deleting database (${dbDir})`, () => {
     const p = join(dbDir, f)
     if (existsSync(p)) unlinkSync(p)
   }
+})
+
+// API keys live in an Electron safeStorage-encrypted vault next to the DB
+// (electron/main/credentials.ts). Without this step a reset keeps the user's
+// credentials and onboarding skips key entry on the "fresh" run.
+step('Deleting credential vault', () => {
+  for (const f of ['credentials.vault', 'credentials.vault.tmp']) {
+    const p = join(dbDir, f)
+    if (existsSync(p)) unlinkSync(p)
+  }
+})
+
+step('Removing backups', () => {
+  rmSync(join(dbDir, 'backups'), { recursive: true, force: true })
+})
+
+step('Removing media library', () => {
+  rmSync(join(dbDir, 'media'), { recursive: true, force: true })
 })
 
 step('Removing twitter-cli', () => {

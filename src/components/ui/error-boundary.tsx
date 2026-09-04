@@ -19,11 +19,11 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, message: error?.message || 'Something went wrong' }
+    return { hasError: true, message: error?.name ? `VIEW_${error.name.toUpperCase()}` : 'VIEW_RENDER_FAILED' }
   }
 
-  componentDidCatch(error: Error, info: any) {
-    console.error('ErrorBoundary caught', error, info)
+  componentDidCatch(error: Error) {
+    console.error('ErrorBoundary caught', error?.name || 'unknown')
   }
 
   handleRetry = () => {

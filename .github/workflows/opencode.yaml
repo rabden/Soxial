@@ -40,5 +40,5 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         with:
-          model: opencode/deepseek-v4-flash-free
+          model: opencode/${{ vars.ZEN_PRIMARY_MODEL || 'muse-spark-1.3-contributor-free' }}
           use_github_token: true

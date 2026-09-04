@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react'
-import Onboarding from './components/Onboarding'
-import Chat from './components/Chat'
+import { lazy, Suspense, useState, useEffect } from 'react'
+import PuterAuthBanner from './components/PuterAuthBanner'
+
+const Onboarding = lazy(() => import('./components/Onboarding'))
+const Chat = lazy(() => import('./components/Chat'))
 
 export default function App() {
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null)
@@ -25,8 +27,13 @@ export default function App() {
   }
 
   return (
-    <>
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-full">
+        <div className="text-muted-foreground/60 text-sm animate-pulse">Loading workspace...</div>
+      </div>
+    }>
       {onboardingComplete ? <Chat initialSessionId={initialSessionId} /> : <Onboarding onComplete={(sessionId?: number) => { if (sessionId) setInitialSessionId(sessionId); checkOnboarding() }} />}
-    </>
+      <PuterAuthBanner />
+    </Suspense>
   )
 }

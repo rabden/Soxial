@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { getDb, getProfile, queryAll, insertRow, updateProfile, getSocialContent, countSocialContent } from './db'
 import { runCli, runTwitterCli, ensureRdtAuth, ensureTwitterAuth } from './cli'
 import { logger } from './log'
+import { PuterAuthCancelledError } from './puter-auth'
 import {
   fetchTwitterUserPosts,
   fetchTwitterReplies,
@@ -15,9 +16,23 @@ import {
   compactRedditForModel,
 } from './social-content'
 
-export function createTools(opts?: { defaultMax?: number }) {
+export function createTools(opts?: {
+  defaultMax?: number
+  platforms?: { twitter?: boolean; reddit?: boolean }
+}) {
   const defaultMax = opts?.defaultMax ?? MAX_SOCIAL_ITEMS
-  return {
+  const twitterEnabled = opts?.platforms?.twitter !== false
+  const redditEnabled = opts?.platforms?.reddit !== false
+
+  const platformEnum = twitterEnabled && redditEnabled
+    ? z.enum(['twitter', 'reddit'])
+    : twitterEnabled
+    ? z.enum(['twitter'])
+    : redditEnabled
+    ? z.enum(['reddit'])
+    : z.enum(['twitter', 'reddit'])
+
+  const sharedTools: Record<string, any> = {
 
     read_profile: {
       description: 'Read the user profile: identity, niche, goals, voice, brand colors, API keys, platform handles.',
@@ -30,14 +45,10 @@ export function createTools(opts?: { defaultMax?: number }) {
       }
     },
 
-    update_profile: {
-      description: 'Update the user profile with new data. Use for setting brand colors, voice, goals, growth strategy, etc.',
+    update_soxial_profile: {
+      description: 'Update the user profile with strategy and voice data. Use for setting brand colors, voice, goals, growth strategy, etc. NOTE: User identity fields (name, handles, timezone) are owned by the user and cannot be changed here.',
       parameters: z.object({
         data: z.object({
-          name: z.string().optional(),
-          twitter_handle: z.string().optional(),
-          reddit_username: z.string().optional(),
-          timezone: z.string().optional(),
           niche: z.string().optional(),
           specialization: z.string().optional(),
           superpower: z.string().optional(),
@@ -56,11 +67,11 @@ export function createTools(opts?: { defaultMax?: number }) {
           growth_target: z.string().optional(),
           portfolio_status: z.string().optional(),
           tone_balance: z.string().optional(),
-          onboarding_complete: z.number().optional(),
-        }).describe('Profile fields to update')
+        }).describe('Strategy and voice profile fields to update')
       }),
       execute: async ({ data }) => {
-        updateProfile(data)
+        const { name, twitter_handle, reddit_username, timezone, onboarding_complete, ...allowed } = (data || {}) as any
+        updateProfile(allowed)
         return { success: true, message: 'Profile updated' }
       }
     },
@@ -184,9 +195,19 @@ export function createTools(opts?: { defaultMax?: number }) {
         })).describe('Array of memory entries to save')
       }),
       execute: async ({ items }) => {
-        for (const m of items)
-          insertRow('memory_entries', m)
-        return { success: true, count: items.length }
+        const db = getDb()
+        let saved = 0
+        const save = db.transaction(() => {
+          for (const m of items) {
+            const exists = db.prepare('SELECT id FROM memory_entries WHERE type = ? AND title = ? AND content = ?')
+              .get(m.type, m.title, m.content)
+            if (exists) continue
+            insertRow('memory_entries', m)
+            saved++
+          }
+        })
+        save()
+        return { success: true, saved, skipped: items.length - saved, total: items.length }
       }
     },
 
@@ -225,18 +246,21 @@ export function createTools(opts?: { defaultMax?: number }) {
       execute: async ({ items }) => {
         let saved = 0, updated = 0
         const db = getDb()
-        for (const p of items) {
-          const existing = db.prepare('SELECT id FROM content_pillars WHERE name = ?').get(p.name) as any
-          if (existing) {
-            db.prepare(`UPDATE content_pillars SET description=@description, structure=@structure,
-              frequency=@frequency, platform_adaptations=@platform_adaptations WHERE id=@id`)
-              .run({ ...p, id: existing.id })
-            updated++
-          } else {
-            insertRow('content_pillars', p)
-            saved++
+        const save = db.transaction(() => {
+          for (const p of items) {
+            const existing = db.prepare('SELECT id FROM content_pillars WHERE name = ?').get(p.name) as any
+            if (existing) {
+              db.prepare(`UPDATE content_pillars SET description=@description, structure=@structure,
+                frequency=@frequency, platform_adaptations=@platform_adaptations WHERE id=@id`)
+                .run({ ...p, id: existing.id })
+              updated++
+            } else {
+              insertRow('content_pillars', p)
+              saved++
+            }
           }
-        }
+        })
+        save()
         return { success: true, saved, updated, total: items.length }
       }
     },
@@ -255,12 +279,15 @@ export function createTools(opts?: { defaultMax?: number }) {
       execute: async ({ items }) => {
         let saved = 0, skipped = 0
         const db = getDb()
-        for (const t of items) {
-          const exists = db.prepare('SELECT id FROM target_accounts WHERE platform = ? AND handle = ?').get(t.platform, t.handle)
-          if (exists) { skipped++; continue }
-          insertRow('target_accounts', t)
-          saved++
-        }
+        const save = db.transaction(() => {
+          for (const t of items) {
+            const exists = db.prepare('SELECT id FROM target_accounts WHERE platform = ? AND handle = ?').get(t.platform, t.handle)
+            if (exists) { skipped++; continue }
+            insertRow('target_accounts', t)
+            saved++
+          }
+        })
+        save()
         return { success: true, saved, skipped, total: items.length }
       }
     },
@@ -276,12 +303,15 @@ export function createTools(opts?: { defaultMax?: number }) {
       execute: async ({ items }) => {
         let saved = 0, skipped = 0
         const db = getDb()
-        for (const v of items) {
-          const exists = db.prepare('SELECT id FROM voice_rules WHERE type = ? AND content = ?').get(v.type, v.content)
-          if (exists) { skipped++; continue }
-          insertRow('voice_rules', v)
-          saved++
-        }
+        const save = db.transaction(() => {
+          for (const v of items) {
+            const exists = db.prepare('SELECT id FROM voice_rules WHERE type = ? AND content = ?').get(v.type, v.content)
+            if (exists) { skipped++; continue }
+            insertRow('voice_rules', v)
+            saved++
+          }
+        })
+        save()
         return { success: true, saved, skipped, total: items.length }
       }
     },
@@ -303,21 +333,24 @@ export function createTools(opts?: { defaultMax?: number }) {
       execute: async ({ items }) => {
         let saved = 0, updated = 0
         const db = getDb()
-        for (const h of items) {
-          const existing = db.prepare('SELECT id FROM hooks WHERE name = ?').get(h.name) as any
-          if (existing) {
-            db.prepare(`UPDATE hooks SET rank=@rank, category=@category, description=@description,
-              why_it_works=@why_it_works, template=@template, niche_examples=@niche_examples,
-              performance_notes=@performance_notes WHERE id=@id`)
-              .run({ ...h, why_it_works: h.why_it_works || null, template: h.template || null,
-                     niche_examples: h.niche_examples || null, performance_notes: h.performance_notes || null,
-                     id: existing.id })
-            updated++
-          } else {
-            insertRow('hooks', h)
-            saved++
+        const save = db.transaction(() => {
+          for (const h of items) {
+            const existing = db.prepare('SELECT id FROM hooks WHERE name = ?').get(h.name) as any
+            if (existing) {
+              db.prepare(`UPDATE hooks SET rank=@rank, category=@category, description=@description,
+                why_it_works=@why_it_works, template=@template, niche_examples=@niche_examples,
+                performance_notes=@performance_notes WHERE id=@id`)
+                .run({ ...h, why_it_works: h.why_it_works || null, template: h.template || null,
+                       niche_examples: h.niche_examples || null, performance_notes: h.performance_notes || null,
+                       id: existing.id })
+              updated++
+            } else {
+              insertRow('hooks', h)
+              saved++
+            }
           }
-        }
+        })
+        save()
         return { success: true, saved, updated, total: items.length }
       }
     },
@@ -335,16 +368,19 @@ export function createTools(opts?: { defaultMax?: number }) {
       execute: async ({ items }) => {
         let saved = 0, updated = 0
         const db = getDb()
-        for (const a of items) {
-          const existing = db.prepare('SELECT id FROM algorithm_rules WHERE platform = ? AND signal = ?').get(a.platform, a.signal) as any
-          if (existing) {
-            db.prepare('UPDATE algorithm_rules SET weight = ?, description = ? WHERE id = ?').run(a.weight, a.description, existing.id)
-            updated++
-          } else {
-            insertRow('algorithm_rules', a)
-            saved++
+        const save = db.transaction(() => {
+          for (const a of items) {
+            const existing = db.prepare('SELECT id FROM algorithm_rules WHERE platform = ? AND signal = ?').get(a.platform, a.signal) as any
+            if (existing) {
+              db.prepare('UPDATE algorithm_rules SET weight = ?, description = ? WHERE id = ?').run(a.weight, a.description, existing.id)
+              updated++
+            } else {
+              insertRow('algorithm_rules', a)
+              saved++
+            }
           }
-        }
+        })
+        save()
         return { success: true, saved, updated, total: items.length }
       }
     },
@@ -500,7 +536,7 @@ export function createTools(opts?: { defaultMax?: number }) {
     schedule_post: {
       description: 'Schedule a post for later. Stores it in the queue with platform, text, and time.',
       parameters: z.object({
-        platform: z.enum(['twitter', 'reddit']),
+        platform: platformEnum,
         type: z.string().describe('Post type from content pillars'),
         text: z.string().describe('Full post text'),
         media_path: z.string().optional(),
@@ -525,6 +561,120 @@ export function createTools(opts?: { defaultMax?: number }) {
       }
     },
 
+    read_image_guide: {
+      description: 'Read the complete image generation guide — platform specs, 5-part prompting framework, brand style integration, examples, common mistakes, and quality checklist. Call this BEFORE generate_image to get full context for crafting the best prompt.',
+      parameters: z.object({}),
+      execute: async () => {
+        const { readImageGenerationGuide } = await import('./reference-files')
+        return { guide: readImageGenerationGuide() }
+      }
+    },
+
+    read_workflow_guide: {
+      description: 'Load a workflow playbook or mandatory ruleset before doing work in its scope. Call this BEFORE running any workflow (post crafting, engagement, planning, strategy, intelligence, trends) and ALWAYS before writing replies/posts for voice rules and media checks. Returns the full markdown guide.',
+      parameters: z.object({
+        guide: z.enum(['post-crafting', 'reply-crafting', 'thread-writing', 'engagement-session', 'content-planner', 'strategy-chat', 'intelligence-update', 'competitor-analysis', 'trend-hunter', 'media-safety', 'voice-guide']).describe('Which guide to load.')
+      }),
+      execute: async ({ guide }) => {
+        const { readWorkflowGuide } = await import('./reference-files')
+        try {
+          return { guide, content: readWorkflowGuide(guide) }
+        } catch (e: any) {
+          logger.warn('tools', `read_workflow_guide(${guide}) failed: ${e.message}`)
+          return { error: e.message }
+        }
+      }
+    },
+
+    inspect_image_url: {
+      description: 'Fetch an image from a direct URL, convert it to base64, and return it as a file part so the model can visually inspect the image content. Use this before replying to posts where the text depends on an attached image.',
+      parameters: z.object({
+        url: z.string().url().describe('Direct image URL to inspect'),
+      }),
+      execute: async ({ url }) => {
+        const parsed = new URL(url)
+        if (!/^https?:$/.test(parsed.protocol)) {
+          return { error: 'Only http(s) image URLs are supported.' }
+        }
+
+        const needsXReferer =
+          parsed.hostname.includes('twitter') ||
+          parsed.hostname.includes('x.com') ||
+          parsed.hostname.includes('twimg')
+        const headers: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        }
+        if (needsXReferer) {
+          headers.Referer = 'https://x.com/'
+          headers.Origin = 'https://x.com'
+        }
+
+        const response = await fetch(url, { headers })
+
+        if (!response.ok) {
+          return { error: `Failed to fetch image (${response.status} ${response.statusText})`, sourceUrl: url }
+        }
+
+        const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || ''
+        if (!mimeType.startsWith('image/')) {
+          return { error: `URL did not return an image content-type (${mimeType || 'unknown'})`, sourceUrl: url }
+        }
+
+        const maxBytes = 12 * 1024 * 1024
+        const buffer = Buffer.from(await response.arrayBuffer())
+        if (buffer.byteLength > maxBytes) {
+          return { error: `Image is too large to inspect (${buffer.byteLength} bytes > ${maxBytes} bytes)`, sourceUrl: url, mimeType }
+        }
+
+        return {
+          sourceUrl: url,
+          mimeType,
+          byteLength: buffer.byteLength,
+          data: buffer.toString('base64'),
+        }
+      },
+      toModelOutput: async ({ output }: { output: any }) => {
+        if (!output || output.error || !output.data) {
+          return { type: 'content' as const, value: [{ type: 'text' as const, text: JSON.stringify(output) }] }
+        }
+        return {
+          type: 'content' as const,
+          value: [
+            { type: 'text' as const, text: `Image from ${output.sourceUrl} (${output.mimeType}, ${output.byteLength} bytes):` },
+            { type: 'file' as const, mediaType: output.mimeType, data: { type: 'data' as const, data: output.data } },
+          ],
+        }
+      },
+    },
+
+    generate_image: {
+      description: 'Generate an image with Google AI Studio Gemini image generation by default, falling back to Puter.js if Gemini fails (this may open a Puter sign-in window for the user). Call read_image_guide first for the full prompting guide, then call read_profile for brand colors before building prompt. Use the 5-part prompting framework.',
+      parameters: z.object({
+        prompt: z.string().describe('Full image prompt. Include text for quotes, labels, headlines, hook cards, or branding when needed. Specify font style, color, size, and placement. End with constraints: "No watermarks, no logos, no AI artifacts."'),
+        filename: z.string().describe('Output filename with .png extension, e.g. twitter_hook_2026-06-23.png'),
+        model: z.enum(['gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-2']).optional().describe('Puter.js image model used for the fallback attempt when Gemini image generation fails.')
+      }),
+      execute: async ({ prompt, filename, model }) => {
+        let safeFilename = filename && filename.trim() ? filename.trim() : `generated_${Date.now()}.png`
+        if (!safeFilename.endsWith('.png')) safeFilename += '.png'
+        try {
+          const { generateImage } = await import('./puter')
+          const { path, backend } = await generateImage(prompt, safeFilename, model)
+          const via = backend === 'gemini' ? 'Gemini' : `Puter.js (${model || 'gpt-image-2'})`
+          return { success: true, path, filename: safeFilename, backend, message: `Image generated with ${via} · saved to ${path}` }
+        } catch (e: any) {
+          if (e instanceof PuterAuthCancelledError) {
+            // Cancelled-only envelope; other errors stay retryable.
+            return { success: false, cancelled: true, error: 'Image could not be generated: the Puter sign-in was dismissed or did not complete. Do not retry automatically — tell the user you cannot generate images until they finish signing in to Puter.' }
+          }
+          return { error: e.message }
+        }
+      }
+    }
+  }
+
+  const twitterTools: Record<string, any> = {
     twitter_status: {
       description: 'Check Twitter/X authentication status. Verifies your X session.',
       parameters: z.object({}),
@@ -842,8 +992,10 @@ export function createTools(opts?: { defaultMax?: number }) {
         const cmd = action === 'unfollow' ? 'unfollow' : 'follow'
         return runCli('twitter', [cmd, handle, '--json'])
       }
-    },
+    }
+  }
 
+  const redditTools: Record<string, any> = {
     reddit_search: {
       description: 'Search Reddit for posts. Use subreddit parameter to browse specific subreddits (e.g., subreddit: "frontend"). Query can be empty when using subreddit parameter to browse all posts in that subreddit.',
       parameters: z.object({
@@ -1077,100 +1229,12 @@ export function createTools(opts?: { defaultMax?: number }) {
         username: z.string()
       }),
       execute: async ({ username }) => runCli('rdt', ['user', username, '--json'])
-    },
-
-    read_image_guide: {
-      description: 'Read the complete image generation guide — platform specs, 5-part prompting framework, brand style integration, examples, common mistakes, and quality checklist. Call this BEFORE generate_image to get full context for crafting the best prompt.',
-      parameters: z.object({}),
-      execute: async () => {
-        const { readFileSync } = await import('fs')
-        const { join } = await import('path')
-        const guidePath = join(__dirname, '../../references/image-generation.md')
-        const content = readFileSync(guidePath, 'utf-8')
-        return { guide: content }
-      }
-    },
-
-    inspect_image_url: {
-      description: 'Fetch an image from a direct URL, convert it to base64, and return it as a file part so the model can visually inspect the image content. Use this before replying to posts where the text depends on an attached image.',
-      parameters: z.object({
-        url: z.string().url().describe('Direct image URL to inspect'),
-      }),
-      execute: async ({ url }) => {
-        const parsed = new URL(url)
-        if (!/^https?:$/.test(parsed.protocol)) {
-          return { error: 'Only http(s) image URLs are supported.' }
-        }
-
-        const needsXReferer =
-          parsed.hostname.includes('twitter') ||
-          parsed.hostname.includes('x.com') ||
-          parsed.hostname.includes('twimg')
-        const headers: Record<string, string> = {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        }
-        if (needsXReferer) {
-          headers.Referer = 'https://x.com/'
-          headers.Origin = 'https://x.com'
-        }
-
-        const response = await fetch(url, { headers })
-
-        if (!response.ok) {
-          return { error: `Failed to fetch image (${response.status} ${response.statusText})`, sourceUrl: url }
-        }
-
-        const mimeType = response.headers.get('content-type')?.split(';')[0]?.trim() || ''
-        if (!mimeType.startsWith('image/')) {
-          return { error: `URL did not return an image content-type (${mimeType || 'unknown'})`, sourceUrl: url }
-        }
-
-        const maxBytes = 12 * 1024 * 1024
-        const buffer = Buffer.from(await response.arrayBuffer())
-        if (buffer.byteLength > maxBytes) {
-          return { error: `Image is too large to inspect (${buffer.byteLength} bytes > ${maxBytes} bytes)`, sourceUrl: url, mimeType }
-        }
-
-        return {
-          sourceUrl: url,
-          mimeType,
-          byteLength: buffer.byteLength,
-          data: buffer.toString('base64'),
-        }
-      },
-      toModelOutput: async ({ output }: { output: any }) => {
-        if (!output || output.error || !output.data) {
-          return { type: 'content' as const, value: [{ type: 'text' as const, text: JSON.stringify(output) }] }
-        }
-        return {
-          type: 'content' as const,
-          value: [
-            { type: 'text' as const, text: `Image from ${output.sourceUrl} (${output.mimeType}, ${output.byteLength} bytes):` },
-            { type: 'file' as const, mediaType: output.mimeType, data: { type: 'data' as const, data: output.data } },
-          ],
-        }
-      },
-    },
-
-    generate_image: {
-      description: 'Generate an image with Google AI Studio Gemini image generation by default, falling back to Puter.js if Gemini fails. Call read_image_guide first for the full prompting guide, then call read_profile for brand colors before building prompt. Use the 5-part prompting framework.',
-      parameters: z.object({
-        prompt: z.string().describe('Full image prompt. Include text for quotes, labels, headlines, hook cards, or branding when needed. Specify font style, color, size, and placement. End with constraints: "No watermarks, no logos, no AI artifacts."'),
-        filename: z.string().describe('Output filename with .png extension, e.g. twitter_hook_2026-06-23.png'),
-        model: z.enum(['gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-1', 'gpt-image-2']).optional().describe('Fallback Puter.js image model if Gemini image generation fails.')
-      }),
-      execute: async ({ prompt, filename }) => {
-        let safeFilename = filename && filename.trim() ? filename.trim() : `generated_${Date.now()}.png`
-        if (!safeFilename.endsWith('.png')) safeFilename += '.png'
-        try {
-          const { generateImage } = await import('./puter')
-          const path = await generateImage(prompt, safeFilename)
-          return { success: true, path, filename: safeFilename, message: `Image saved to ${path}` }
-        } catch (e: any) {
-          return { error: e.message }
-        }
-      }
     }
+  }
+
+  return {
+    ...sharedTools,
+    ...(twitterEnabled ? twitterTools : {}),
+    ...(redditEnabled ? redditTools : {})
   }
 }

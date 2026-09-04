@@ -10,7 +10,7 @@ import { cn } from "src/lib/utils";
 import type { LucideIcon } from "lucide-react";
 import { BrainIcon, ChevronDownIcon, DotIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { createContext, memo, useContext, useMemo, useRef, useEffect } from "react";
+import { createContext, memo, useContext, useMemo, useRef, useEffect, useState } from "react";
 
 interface ChainOfThoughtContextValue {
   isOpen: boolean;
@@ -115,6 +115,43 @@ const stepStatusStyles = {
   pending: "text-muted-foreground/50",
 };
 
+const chevronPattern = Array.from({ length: 9 }, (_, i) => {
+  const r = Math.floor(i / 3),
+    c = i % 3;
+  return (c + Math.abs(r - 1)) * 90;
+});
+
+function StepTimer() {
+  const [ds, setDs] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setDs((d: number) => d + 1), 100);
+    return () => clearInterval(t);
+  }, []);
+  const total = ds / 10;
+  return (
+    <span className="font-mono text-[11px] text-zinc-500 tabular-nums shrink-0 ml-auto pl-2">
+      {total < 60 ? `${total.toFixed(1)}s` : `${Math.floor(total / 60)}m ${(total % 60).toFixed(1)}s`}
+    </span>
+  );
+}
+
+function StepPixelGrid() {
+  return (
+    <span aria-hidden className="grid shrink-0 grid-cols-[repeat(3,4px)] gap-[1.5px] mr-0.5">
+      {chevronPattern.map((delay, index) => (
+        <span
+          key={index}
+          className="size-[4px] bg-white rounded-[1px]"
+          style={{
+            opacity: 0.15,
+            animation: `pixel-on 650ms ease-in-out ${delay}ms infinite`,
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
 export const ChainOfThoughtStep = memo(
   ({
     className,
@@ -124,26 +161,51 @@ export const ChainOfThoughtStep = memo(
     status = "complete",
     children,
     ...props
-  }: ChainOfThoughtStepProps) => (
-    <div
-      className={cn(
-        "flex items-center gap-2 text-sm",
-        stepStatusStyles[status],
-        "fade-in-0 animate-in",
-        className
-      )}
-      {...props}
-    >
-      <Icon className="size-4 shrink-0" />
-      <div className="truncate flex-1">
-        {label}
-        {description && (
-          <span className="text-muted-foreground/60 ml-2 text-xs truncate">{description}</span>
+  }: ChainOfThoughtStepProps) => {
+    const isActive = status === "active";
+
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-2 text-sm min-w-0 py-0.5",
+          stepStatusStyles[status],
+          "fade-in-0 animate-in",
+          className
         )}
+        {...props}
+      >
+        {isActive ? (
+          <StepPixelGrid />
+        ) : (
+          <Icon className="size-4 shrink-0 text-muted-foreground/80" />
+        )}
+        <div className="truncate flex-1 min-w-0 flex items-baseline gap-2">
+          {isActive ? (
+            <span
+              className="bg-clip-text font-medium text-transparent truncate"
+              style={{
+                backgroundImage:
+                  "linear-gradient(90deg, rgba(255,255,255,0.4) 30%, rgba(255,255,255,0.95) 50%, rgba(255,255,255,0.4) 70%)",
+                backgroundSize: "200% 100%",
+                animation: "shimmer-text 1.4s linear infinite",
+              }}
+            >
+              {label}
+            </span>
+          ) : (
+            <span className="truncate">{label}</span>
+          )}
+          {description && (
+            <span className="text-muted-foreground/60 text-xs truncate font-normal">
+              {description}
+            </span>
+          )}
+        </div>
+        {isActive && <StepTimer />}
+        {children}
       </div>
-      {children}
-    </div>
-  )
+    );
+  }
 );
 
 export type ChainOfThoughtContentProps = ComponentProps<

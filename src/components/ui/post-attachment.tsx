@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { cn } from 'src/lib/utils'
 import { Loader2, Link2, FileText } from 'lucide-react'
 
@@ -82,26 +82,45 @@ function LinkPreview({ url, title, description, image }: { url: string; title?: 
     return () => { alive = false }
   }, [url])
 
+  // Large og-image variant: big image on top, thin strip below with title/description/domain
+  // Matches X's summary_large_image card (Image 1).
+  if (preview.image) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block rounded-xl border border-white/[0.12] overflow-hidden bg-black hover:bg-white/[0.02] transition-colors group no-underline"
+      >
+        <div className="w-full aspect-[1.91/1] max-h-[268px] overflow-hidden bg-zinc-900">
+          <img src={preview.image} alt={preview.title || ''} className="w-full h-full object-cover" loading="lazy" />
+        </div>
+        <div className="px-3 py-2.5 bg-white/[0.03] border-t border-white/[0.08]">
+          <div className="text-[13px] font-medium text-white truncate leading-tight">{preview.title || domain}</div>
+          {preview.description && <div className="text-[12px] text-zinc-400 truncate leading-snug mt-0.5">{preview.description}</div>}
+          <div className="flex items-center gap-1 text-[11px] text-zinc-500 truncate mt-1">
+            <Link2 className="size-3 shrink-0" />
+            <span className="truncate">{domain}</span>
+          </div>
+        </div>
+      </a>
+    )
+  }
+
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex gap-3 rounded-xl border border-border overflow-hidden bg-muted/30 hover:bg-muted/60 transition-colors group no-underline"
+      className="flex gap-3 rounded-xl border border-white/[0.12] overflow-hidden bg-white/[0.04] hover:bg-white/[0.07] transition-colors group no-underline"
     >
-      {preview.image ? (
-        <div className="w-32 shrink-0 bg-muted overflow-hidden">
-          <img src={preview.image} alt={preview.title || ''} className="size-full object-cover" loading="lazy" />
-        </div>
-      ) : (
-        <div className="w-12 shrink-0 flex items-center justify-center bg-muted/50">
-          <FileText className="size-4 text-muted-foreground" />
-        </div>
-      )}
+      <div className="w-12 shrink-0 flex items-center justify-center bg-white/[0.05] border-r border-white/[0.08]">
+        <FileText className="size-4 text-zinc-500" />
+      </div>
       <div className="flex flex-col justify-center gap-0.5 py-2 pr-3 min-w-0 flex-1">
-        {preview.title && <span className="text-[13px] font-medium text-foreground truncate leading-tight">{preview.title}</span>}
-        {preview.description && <span className="text-[11px] text-muted-foreground line-clamp-2 leading-snug">{preview.description}</span>}
-        <span className="flex items-center gap-1 text-[11px] text-muted-foreground/70 truncate mt-0.5">
+        {preview.title && <span className="text-[13px] font-medium text-white truncate leading-tight">{preview.title}</span>}
+        {preview.description && <span className="text-[11px] text-zinc-400 line-clamp-2 leading-snug">{preview.description}</span>}
+        <span className="flex items-center gap-1 text-[11px] text-zinc-500 truncate mt-0.5">
           <Link2 className="size-2.5" />
           {domain}
         </span>
@@ -110,11 +129,86 @@ function LinkPreview({ url, title, description, image }: { url: string; title?: 
   )
 }
 
+let activeVideo: HTMLVideoElement | null = null
+
+/** Remount budget after transient failures — 1 initial load + 2 retries. */
+const VIDEO_MAX_ATTEMPTS = 2
+
 function VideoMedia({ src, type, poster, fill }: { src: string; type?: string; poster?: string; fill?: boolean }) {
   const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const [ready, setReady] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // StrictMode double-invokes state updaters — keep the retry bookkeeping in
+  // a ref so handleError stays side-effect-free inside setState.
+  const attemptRef = useRef(0)
 
   // ponytail: proxy twimg.com video URLs through main process (bypasses Referer 403)
   const proxySrc = decodeUrl(src).replace(/^https:\/\/(.*\.twimg\.com\/)/, 'twimg://$1')
+  const isGif = type === 'gif'
+
+  // Fresh retry budget per source; clear any pending retry on unmount.
+  useEffect(() => {
+    attemptRef.current = 0
+    setAttempt(0)
+    setFailed(false)
+    setReady(false)
+  }, [proxySrc])
+  useEffect(() => () => {
+    if (retryTimer.current) clearTimeout(retryTimer.current)
+  }, [])
+
+  // Transient failures (severed stream, CDN 5xx blip) are common on twimg —
+  // remount the <video> after a short backoff so Chromium re-issues the
+  // request; only surface the failure UI once the budget is spent.
+  const handleError = useCallback(() => {
+    setReady(false)
+    if (attemptRef.current >= VIDEO_MAX_ATTEMPTS) {
+      setFailed(true)
+      return
+    }
+    if (retryTimer.current) clearTimeout(retryTimer.current)
+    const delay = 400 * 2 ** attemptRef.current
+    const next = attemptRef.current + 1
+    retryTimer.current = setTimeout(() => {
+      attemptRef.current = next
+      setAttempt(next)
+    }, delay)
+  }, [])
+
+  useEffect(() => {
+    if (isGif) return
+    const video = videoRef.current
+    if (!video) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const v = entry.target as HTMLVideoElement
+          if (entry.isIntersecting) {
+            if (activeVideo && activeVideo !== v) {
+              activeVideo.pause()
+            }
+            // muted autoplay — user can unmute via controls
+            v.muted = true
+            const p = v.play()
+            if (p) p.catch(() => {})
+            activeVideo = v
+          } else {
+            v.pause()
+            if (activeVideo === v) activeVideo = null
+          }
+        })
+      },
+      { threshold: 0.5 },
+    )
+    observer.observe(video)
+    return () => {
+      observer.disconnect()
+      if (activeVideo === video) activeVideo = null
+    }
+  }, [isGif, proxySrc, attempt])
 
   if (failed) {
     return (
@@ -125,35 +219,80 @@ function VideoMedia({ src, type, poster, fill }: { src: string; type?: string; p
     )
   }
 
+  // key={attempt} (passed directly on each <video>) forces a fresh element
+  // per retry — Chromium keeps the dead pipeline of an errored <video>, so
+  // recovery must be a remount, not a src re-assignment.
+  const videoProps = {
+    src: proxySrc,
+    poster: poster ? decodeUrl(poster) : undefined,
+    onError: handleError,
+    onCanPlay: () => setReady(true),
+    className: cn(fill ? 'size-full' : 'w-full max-h-[400px]', 'object-cover'),
+  }
+
+  // While a retry is in flight the element is blank — show a quiet spinner.
+  const spinner = !ready && attempt > 0 ? (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+    </div>
+  ) : null
+
+  if (isGif) {
+    return (
+      <div className={cn('relative', fill && 'size-full')}>
+        <video key={attempt} {...videoProps} muted autoPlay loop playsInline preload="auto" />
+        {spinner}
+      </div>
+    )
+  }
+
   return (
-    <video
-      src={proxySrc}
-      poster={poster ? decodeUrl(poster) : undefined}
-      className={cn(fill ? 'size-full' : 'w-full max-h-[400px]', 'object-cover')}
-      controls={type === 'video'}
-      muted
-      autoPlay={type === 'gif'}
-      loop={type === 'gif'}
-      playsInline
-      preload="auto"
-      onError={() => setFailed(true)}
-    />
+    <div className={cn('relative', fill && 'size-full')}>
+      <video
+        key={attempt}
+        ref={videoRef}
+        {...videoProps}
+        controls
+        muted
+        playsInline
+        preload="metadata"
+        onPlay={() => {
+          if (activeVideo && activeVideo !== videoRef.current) activeVideo.pause()
+          if (videoRef.current) activeVideo = videoRef.current
+        }}
+        onPause={() => {
+          if (activeVideo === videoRef.current) activeVideo = null
+        }}
+      />
+      {spinner}
+    </div>
   )
 }
 
-export function PostAttachments({ attachments, className }: { attachments?: PostAttachment[]; className?: string }) {
+export function PostAttachments({
+  attachments,
+  className,
+  mediaClassName,
+}: {
+  attachments?: PostAttachment[]
+  className?: string
+  mediaClassName?: string
+}) {
   if (!attachments || attachments.length === 0) return null
 
-  const media = attachments.filter(a => a.type !== 'link' && !a.title)
-  const links = attachments.filter(a => a.type === 'link' || a.title)
+  const media = attachments.filter((a) => a.type !== 'link' && !a.title)
+  const links = attachments.filter((a) => a.type === 'link' || a.title)
 
   return (
     <div className={cn('flex flex-col gap-2', className)}>
       {media.length > 0 && (
-        <div className={cn(
-          'rounded-xl overflow-hidden border border-border',
-          media.length === 1 ? '' : 'grid grid-cols-2 gap-0.5'
-        )}>
+        <div
+          className={cn(
+            'rounded-xl overflow-hidden border border-border',
+            mediaClassName,
+            media.length === 1 ? '' : 'grid grid-cols-2 gap-0.5'
+          )}
+        >
           {media.map((att, i) => {
             const isVideo = att.type === 'video' || att.type === 'gif'
             const fill = media.length > 1
@@ -180,7 +319,12 @@ export function PostAttachments({ attachments, className }: { attachments?: Post
 }
 
 export function extractTweetAttachments(raw: any): PostAttachment[] {
-  return uniqByUrl([...extractTweetMedia(raw), ...extractTweetLinks(raw)])
+  const media = extractTweetMedia(raw)
+  // X behavior: native media replaces the link card — when a tweet has an
+  // image/video/gif, its URLs render as plain links in the text and never as
+  // an og preview next to the media.
+  if (media.length > 0) return uniqByUrl(media)
+  return uniqByUrl(extractTweetLinks(raw))
 }
 
 export function extractTweetMedia(raw: any): PostAttachment[] {
@@ -203,31 +347,64 @@ export function extractTweetMedia(raw: any): PostAttachment[] {
 export function expandTweetLinks(text: string, raw: any): string {
   if (!text) return text
   const mediaUrls = getTweetMediaTcoUrls(raw)
+  // Only real url entities (url ≠ expanded_url) participate in the exact
+  // replacement pass — synthetic `{url: E, expanded_url: E}` entries built
+  // from `raw.urls` are no-ops that used to poison the `used` set below and
+  // starve the positional fallback (only the first N links expanded).
   const replacements = getTweetUrlEntities(raw)
     .map((entity) => ({
       from: firstString(entity?.url, entity?.tco, entity?.shortUrl, entity?.short_url),
       to: getExpandedTweetUrl(entity),
     }))
-    .filter((item) => item.from && item.to && !mediaUrls.has(item.from))
+    .filter((item) => item.from && item.to && item.from !== item.to && !mediaUrls.has(item.from))
     .sort((a, b) => b.from.length - a.from.length)
 
-  return replacements.reduce((acc, item) => acc.split(item.from).join(item.to), text)
+  let expanded = replacements.reduce((acc, item) => acc.split(item.from).join(item.to), text)
+
+  // Fallback for twitter-cli's parser which drops t.co but keeps expanded order (parser.py urls = [expanded_url]).
+  // If t.co remains after entity expansion, replace sequentially with raw.urls / expandedUrls.
+  if (expanded.includes('https://t.co/')) {
+    const urlCandidates = [
+      ...(Array.isArray(raw?.urls) ? raw.urls : []),
+      ...(Array.isArray(raw?.expandedUrls) ? raw.expandedUrls : []),
+    ].filter((u) => typeof u === 'string' && u && !/^https?:\/\/(t\.co|pic\.twitter\.com)\//i.test(u))
+    if (urlCandidates.length > 0) {
+      // Track which candidates have already been used via the entity map to avoid double-consuming
+      const used = new Set(replacements.map((r) => r.to))
+      const remaining = urlCandidates.filter((u) => !used.has(u))
+      let idx = 0
+      expanded = expanded.replace(/https:\/\/t\.co\/\w+/g, (match) => {
+        if (mediaUrls.has(match)) return match
+        if (idx < remaining.length) return remaining[idx++]
+        // fallback to any remaining in order if we exhausted the filtered list
+        if (idx < urlCandidates.length) return urlCandidates[idx++]
+        return match
+      })
+    }
+  }
+
+  return expanded
 }
 
 function extractTweetLinks(raw: any): PostAttachment[] {
   const mediaUrls = getTweetMediaTcoUrls(raw)
   const card = getTweetCardPreview(raw)
+  // Intended behaviour (owner-confirmed): the tweet's og card decorates ONLY
+  // the first link — every other link renders as a plain expanded link.
+  let cardApplied = false
   const links = getTweetUrlEntities(raw)
     .filter((entity) => !mediaUrls.has(firstString(entity?.url, entity?.tco, entity?.shortUrl, entity?.short_url)))
     .map((entity): PostAttachment | null => {
       const url = getExpandedTweetUrl(entity)
       if (!url || /^https?:\/\/(t\.co|pic\.twitter\.com|x\.com|twitter\.com)\//i.test(url)) return null
+      const og = !cardApplied && card ? card : undefined
+      if (og) cardApplied = true
       return {
         type: 'link',
         url,
-        title: firstString(entity?.title, entity?.unwound?.title, entity?.unwoundUrl?.title, card?.title),
-        description: firstString(entity?.description, entity?.unwound?.description, entity?.unwoundUrl?.description, card?.description),
-        image: firstString(getTweetEntityImage(entity), card?.image),
+        title: firstString(entity?.title, entity?.unwound?.title, entity?.unwoundUrl?.title, og?.title),
+        description: firstString(entity?.description, entity?.unwound?.description, entity?.unwoundUrl?.description, og?.description),
+        image: firstString(getTweetEntityImage(entity), og?.image),
       }
     })
     .filter((att): att is PostAttachment => Boolean(att))

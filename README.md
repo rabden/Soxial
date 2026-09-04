@@ -36,9 +36,36 @@ npm run dev
 ```
 
 Requires:
-- Node.js 20+
+- Node.js 24.x and npm 10.x
 - A free [Google AI Studio API key](https://aistudio.google.com/apikey)
 - (Optional) Logged-in X and Reddit sessions for platform features
+
+### Native SQLite dependencies
+
+Soxial uses `better-sqlite3`, which must be compiled for the runtime that loads
+it. Test commands prepare the Node ABI; build and packaging commands should use
+the Electron ABI:
+
+```bash
+npm run native:node      # before running Vitest directly
+npm test                # prepares the Node ABI automatically
+npm run native:electron  # before running Electron builds directly
+npm run build
+```
+
+Do not run Node tests and Electron development/builds concurrently because both
+ABIs use the same native module path. If you see a `NODE_MODULE_VERSION`
+mismatch, run the preparation command for the operation you want to perform.
+
+`predev` and `build` run `native:electron` automatically; `preview` does not, so
+run it yourself after a test session.
+
+`native:node` rebuilds the node_modules tree that actually owns
+`better-sqlite3`, which is not always this project. When the package is hoisted
+above the repo or shared from another checkout (linked installs, monorepos, agent
+worktrees), a plain `npm rebuild` reports success while leaving the loaded binary
+untouched. If the ABI check fails, it prints the resolved binary path, the ABI it
+expected, and the ABI it found.
 
 ### Development DevTools
 

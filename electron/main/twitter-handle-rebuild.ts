@@ -310,32 +310,29 @@ export async function startTwitterHandleRebuild(
     const prompt = buildPrompt(handle, evidence)
 
     const result = await new Promise<{ text: string; error?: string }>((resolve, reject) => {
-      runAgent(
-        [{ role: 'user', content: prompt }],
-        (text) => progress({ phase: 'chunk', text }),
-        (name, args) => progress({ phase: 'toolCall', name, args }),
-        (name, result) => progress({ phase: 'toolResult', name, result }),
-        (text) => resolve({ text }),
-        (error) => resolve({ text: '', error }),
-        undefined,
-        (info) => progress({ phase: 'transientRetry', ...info }),
-        { maxSteps: 30, fallbackChain: getOnboardingFallbackChain() },
-        tools,
-        SYSTEM_PROMPT,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        (model) => progress({ phase: 'modelSwitch', model }),
-      ).catch(reject)
+      runAgent({
+        messages: [{ role: 'user', content: prompt }],
+        onChunk: text => progress({ phase: 'chunk', text }),
+        onToolCall: (name, args) => progress({ phase: 'toolCall', name, args }),
+        onToolResult: (name, result) => progress({ phase: 'toolResult', name, result }),
+        onDone: text => resolve({ text }),
+        onError: error => resolve({ text: '', error }),
+        onTransientRetry: info => progress({ phase: 'transientRetry', ...info }),
+        options: { maxSteps: 30, fallbackChain: getOnboardingFallbackChain() },
+        toolsOverride: tools,
+        systemPromptOverride: SYSTEM_PROMPT,
+        onModelSwitch: model => progress({ phase: 'modelSwitch', model }),
+      }).catch(reject)
     })
 
     if (result.error) throw new Error(result.error)
     validateState(state)
 
     progress({ phase: 'cutover', message: 'Applying rebuilt profile' })
+    const twitterName = (evidence.twitter_user as any)?.data?.name || (evidence.twitter_whoami as any)?.data?.name || null
     const cutover: TwitterHandleRebuildCutover = {
       twitterHandle: handle,
+      twitterName,
       profile: state.profile,
       hooks: state.hooks,
       pillars: state.pillars,

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ['fflate'] })],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'electron/main/index.ts') }
@@ -23,11 +23,19 @@ export default defineConfig({
     root: 'src',
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/index.html') }
+        input: { index: resolve(__dirname, 'src/index.html') },
+        output: {
+          manualChunks: {
+            markdown: ['streamdown', '@streamdown/cjk', '@streamdown/code', '@streamdown/math'],
+            mermaid: ['@streamdown/mermaid'],
+            socialEmbeds: ['react-tweet'],
+          },
+        },
       }
     },
     resolve: {
       alias: {
+        '@': resolve(__dirname, 'src'),
         '@renderer': resolve(__dirname, 'src'),
         'src': resolve(__dirname, 'src')
       }
