@@ -19,6 +19,17 @@ function isDraftId(id: string): boolean {
   return /^(drft|rpl|nxan)/.test(id)
 }
 
+/**
+ * The agent sometimes emits a Reddit reply under a Twitter/generic fence
+ * (the prompt historically showed the JSON without the ::: fence name).
+ * Route by payload: Reddit previews carry postId, X ones carry originalId —
+ * so Reddit content never renders through the Twitter card path.
+ */
+function isRedditReplyPayload(data: any): boolean {
+  if (!data || typeof data !== 'object') return false
+  return Boolean(data.postId) && !data.originalId
+}
+
 function forceIdOnly(data: any, type: string): any {
   if (type === 'tweet-card') {
     if (data.id && !isDraftId(data.id)) {
@@ -196,6 +207,13 @@ export function RichContent({ children, isAnimating, onCardAction }: { children:
           )
         }
         if (seg.type === 'reply-preview' || seg.type === 'twitter-reply-preview' || seg.type === 'tweet-reply-preview') {
+          if (isRedditReplyPayload(seg.data)) {
+            return (
+              <RenderErrorBoundary key={i} label="the reddit reply preview">
+                <RedditReplyPreview originalId={seg.data.originalId} postId={seg.data.postId} commentId={seg.data.commentId} original={seg.data.original} replyContent={seg.data.reply || seg.data.replyContent} replyId={seg.data.replyId} replyName={seg.data.replyName} showPostButton={seg.data?.showPostButton} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction(seg.type, seg.data) : undefined} />
+              </RenderErrorBoundary>
+            )
+          }
           return (
             <RenderErrorBoundary key={i} label="the reply preview">
               <TwitterReplyPreview originalId={seg.data.originalId} original={seg.data.original} replyContent={seg.data.reply || seg.data.replyContent} replyId={seg.data.replyId} replyHandle={seg.data.replyHandle} replyName={seg.data.replyName} showPostButton={seg.data?.showPostButton} onPost={seg.data?.showPostButton && onCardAction ? () => onCardAction(seg.type, seg.data) : undefined} />

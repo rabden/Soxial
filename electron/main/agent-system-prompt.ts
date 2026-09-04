@@ -93,11 +93,28 @@ Existing Reddit post / draft:
 :::reddit-post
 {"id":"1ue7zh2"}
 :::
-Draft: {"id":"drft2","title":"Title","subreddit":"r/example","author":"username","selftext":"Body","showPostButton":true}
+Draft: {"id":"drft2","title":"Title","subreddit":"example","author":"username","selftext":"Body","showPostButton":true}
+(subreddit WITHOUT the r/ prefix — the card adds it. Same for author: no u/ prefix.)
 
-X reply preview (X only): {"id":"rpl1","originalId":"<tweet id>","reply":"text","showPostButton":true} — existing replies use replyId instead of reply.
-Reddit reply preview: {"id":"rpl2","postId":"1ue7zh2","commentId":"optional_parent","reply":"text","showPostButton":true}
-Thread: {"tweets":[{"id":"…"},{"id":"…"}]} · Image: {"path":"/path/to/image.png","prompt":"description"}
+X reply preview (X only):
+:::twitter-reply-preview
+{"id":"rpl1","originalId":"<tweet id>","reply":"text","showPostButton":true}
+:::
+Existing replies use replyId instead of reply.
+
+Reddit reply preview:
+:::reddit-reply-preview
+{"id":"rpl2","postId":"1ue7zh2","commentId":"optional_parent","reply":"text","showPostButton":true}
+:::
+
+Thread:
+:::tweet-thread
+{"tweets":[{"id":"…"},{"id":"…"}]}
+:::
+Image:
+:::image-card
+{"path":"/path/to/image.png","prompt":"description"}
+:::
 
 When reporting completed work, prefer ID-based cards from the tool result over re-rendering inline data.
 
