@@ -958,23 +958,52 @@ interface TwitterReplyPreviewProps {
 }
 
 export function TwitterReplyPreview({ original, originalId, replyContent, replyId, replyHandle, replyName, onPost, showPostButton, className }: TwitterReplyPreviewProps) {
+  const isDraft = !replyId
+  const draftHandle = (replyHandle || replyName || 'you').replace(/^@/, '')
+  const draftName = replyName || replyHandle || 'You'
+
   return (
-    <div className={cn('w-full', className)}>
-      {originalId ? <TweetCard variant="feed" tweetId={originalId} /> : <TweetCard variant="feed" {...original} />}
-      <div className="ml-6 mt-1 border-l-2 border-border pl-4">
-        <div className="rounded-xl bg-muted/50 border border-border p-3.5">
-          <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
-              {replyId ? 'Reply' : `Proposed reply ${replyName ? `as ${replyName}` : ''}`}
-            </span>
-            {showPostButton && onPost && (
-              <button onClick={onPost} className="ml-auto flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-colors">
-                <Send className="size-3.5" />
-                Send
-              </button>
-            )}
-          </div>
-          {replyId ? <TweetCard variant="feed" tweetId={replyId} /> : <p className="text-[14px] leading-5 text-foreground whitespace-pre-wrap">{replyContent}</p>}
+    // Same outer chrome as the tweet-card branch in rich-content: one rounded
+    // black card. Inside, the original and the reply render through the
+    // identical TweetCard feed path (avatar, header, body, action bar),
+    // joined by an X-style avatar-gutter spine — no muted box.
+    <div className={cn('w-full overflow-hidden rounded-xl border border-white/[0.06] bg-black', className)}>
+      {isDraft && (
+        <div className="flex items-center gap-2 px-4 pb-1 pt-3">
+          <span className="text-xs font-medium text-muted-foreground">
+            Proposed reply{draftName !== 'You' ? ` as ${draftName}` : ''}
+          </span>
+          {showPostButton && onPost && (
+            <button onClick={onPost} className="ml-auto flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-colors">
+              <Send className="size-3.5" />
+              Send
+            </button>
+          )}
+        </div>
+      )}
+      <div>
+        <div className="relative">
+          {originalId ? (
+            <TweetCard variant="feed" tweetId={originalId} className="!border-b-0" />
+          ) : (
+            <TweetCard variant="feed" {...original} className="!border-b-0" />
+          )}
+          <div aria-hidden className="absolute bottom-0 left-[35px] top-[52px] w-[2px] bg-white/[0.12]" />
+        </div>
+        <div className="relative">
+          <div aria-hidden className="absolute left-[35px] top-0 h-3 w-[2px] bg-white/[0.12]" />
+          {replyId ? (
+            <TweetCard variant="feed" tweetId={replyId} className="!border-b-0" />
+          ) : (
+            <TweetCard
+              variant="feed"
+              preview
+              authorName={draftName}
+              authorHandle={draftHandle}
+              content={replyContent}
+              className="!border-b-0"
+            />
+          )}
         </div>
       </div>
     </div>
