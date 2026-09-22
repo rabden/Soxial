@@ -77,9 +77,15 @@ describe('prompt routing consistency', () => {
     }
   })
 
-  it('keeps the calm stop-behavior contract in the prompt', () => {
+  it('keeps the response-economy contract in the prompt', () => {
     const prompt = getSystemPrompt()
-    expect(prompt).toContain('STOP BEHAVIOR')
+    // Double-rendering (a card plus a reply preview of the same post) is the
+    // verbosity failure mode this guards against.
+    expect(prompt).toContain('Never render the same post twice')
+    expect(prompt).toContain('self-describing')
+    // The stop-behavior section was removed with the enforcement-lite rewrite;
+    // the aggressive framing it once replaced stays out too.
+    expect(prompt).not.toContain('STOP BEHAVIOR')
     expect(prompt).not.toContain('NEVER STOP AFTER ONE TASK')
     expect(prompt).not.toContain('AUTO-PREPARE THE NEXT TASK')
   })
